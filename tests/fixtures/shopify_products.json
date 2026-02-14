@@ -1,0 +1,63 @@
+{
+  "products": [
+    {
+      "id": 1001,
+      "title": "Tree Runner",
+      "handle": "tree-runner",
+      "body_html": "<p>Lightweight running shoe</p>",
+      "vendor": "Allbirds",
+      "product_type": "Shoes",
+      "created_at": "2024-01-01T00:00:00Z",
+      "tags": "shoes, running, sustainable",
+      "images": [
+        {
+          "src": "https://cdn.shopify.com/img1.jpg",
+          "alt": "Tree Runner"
+        }
+      ],
+      "variants": [
+        {
+          "id": 2001,
+          "title": "M 9 / Natural White",
+          "price": "98.00",
+          "sku": "TR-M9-NW",
+          "inventory_quantity": 50
+        }
+      ]
+    },
+    {
+      "id": 1002,
+      "title": "Wool Runner",
+      "handle": "wool-runner",
+      "body_html": "<p>Classic everyday shoe</p>",
+      "vendor": "Allbirds",
+      "product_type": "Shoes",
+      "tags": "shoes, everyday, wool",
+      "images": [
+        {
+          "src": "https://cdn.shopify.com/img2.jpg"
+        }
+      ],
+      "variants": [
+        {
+          "id": 2002,
+          "title": "M 10 / Grey",
+          "price": "110.00",
+          "sku": "WR-M10-GR",
+          "inventory_quantity": 30
+        }
+      ]
+    },
+    {
+      "id": 1003,
+      "title": "Tree Dasher",
+      "handle": "tree-dasher",
+      "body_html": "<p>Performance running shoe</p>",
+      "vendor": "Allbirds",
+      "product_type": "Shoes",
+      "tags": "shoes, running, performance",
+      "images": [],
+      "variants": []
+    }
+  ]
+}

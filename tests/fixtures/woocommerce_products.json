@@ -1,0 +1,79 @@
+[
+  {
+    "id": 101,
+    "name": "Earl Grey Tea",
+    "slug": "earl-grey-tea",
+    "permalink": "https://shop.example.com/product/earl-grey-tea/",
+    "description": "<p>Classic bergamot-flavored black tea</p>",
+    "short_description": "Classic Earl Grey",
+    "prices": {
+      "price": "899",
+      "regular_price": "999",
+      "sale_price": "899",
+      "currency_code": "USD",
+      "currency_minor_unit": 2
+    },
+    "images": [
+      {
+        "id": 1,
+        "src": "https://shop.example.com/wp-content/uploads/earl-grey.jpg",
+        "alt": "Earl Grey Tea"
+      }
+    ],
+    "categories": [
+      {
+        "id": 5,
+        "name": "Black Tea"
+      }
+    ],
+    "tags": [
+      {
+        "id": 10,
+        "name": "bestseller"
+      }
+    ],
+    "attributes": [
+      {
+        "id": 1,
+        "name": "Weight",
+        "terms": [
+          {
+            "id": 1,
+            "name": "100g"
+          }
+        ]
+      }
+    ],
+    "variations": []
+  },
+  {
+    "id": 102,
+    "name": "Green Tea Jasmine",
+    "slug": "green-tea-jasmine",
+    "permalink": "https://shop.example.com/product/green-tea-jasmine/",
+    "description": "<p>Delicate jasmine-scented green tea</p>",
+    "short_description": "Jasmine Green Tea",
+    "prices": {
+      "price": "1299",
+      "regular_price": "1299",
+      "sale_price": "",
+      "currency_code": "USD",
+      "currency_minor_unit": 2
+    },
+    "images": [
+      {
+        "id": 2,
+        "src": "https://shop.example.com/wp-content/uploads/jasmine.jpg"
+      }
+    ],
+    "categories": [
+      {
+        "id": 6,
+        "name": "Green Tea"
+      }
+    ],
+    "tags": [],
+    "attributes": [],
+    "variations": []
+  }
+]

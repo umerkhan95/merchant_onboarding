@@ -1,0 +1,31 @@
+{
+  "items": [
+    {
+      "id": 1,
+      "sku": "MAG-001",
+      "name": "Magento Test Product",
+      "price": 49.99,
+      "status": 1,
+      "type_id": "simple",
+      "custom_attributes": [
+        {"attribute_code": "description", "value": "<p>A test product</p>"},
+        {"attribute_code": "image", "value": "/m/a/mag-001.jpg"},
+        {"attribute_code": "url_key", "value": "magento-test-product"}
+      ]
+    },
+    {
+      "id": 2,
+      "sku": "MAG-002",
+      "name": "Another Product",
+      "price": 29.99,
+      "status": 1,
+      "type_id": "configurable",
+      "custom_attributes": [
+        {"attribute_code": "description", "value": "<p>Another product</p>"},
+        {"attribute_code": "image", "value": "/a/n/another.jpg"},
+        {"attribute_code": "url_key", "value": "another-product"}
+      ]
+    }
+  ],
+  "total_count": 2
+}

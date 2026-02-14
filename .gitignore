@@ -37,3 +37,10 @@ celerybeat-schedule
 
 # Docker
 docker-compose.override.yml
+
+# Claude Code
+.claude/
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/

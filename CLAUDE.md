@@ -55,7 +55,7 @@ POST /api/v1/onboard {shop_url}
    ProgressTracker → SSE → Frontend
 ```
 
-## Extraction Strategy (3 tiers)
+## Extraction Strategy (5 tiers)
 
 ### Tier 1: Platform APIs (fastest, most reliable, no scraping needed)
 | Platform | Endpoint | Auth | Limit |
@@ -64,16 +64,26 @@ POST /api/v1/onboard {shop_url}
 | WooCommerce | `/wp-json/wc/store/v1/products` | None (Store API) | Variable |
 | Magento 2 | `/rest/V1/products` | None (guest default) | searchCriteria |
 
-### Tier 2: Sitemap → crawl4ai CSS extraction
-- Parse `/sitemap.xml` for product URLs (100-1000+ URLs/sec)
-- Crawl each product page with `JsonCssExtractionStrategy`
-- Platform-specific CSS schemas (BigCommerce, Squarespace, PrestaShop, etc.)
+### Tier 2: Schema.org JSON-LD
+- Extract structured data from `<script type="application/ld+json">`
+- Works on ~60% of modern e-commerce sites
+- Zero cost, high quality
 
-### Tier 3: Deep crawl (last resort for sites without API or sitemap)
-- Schema.org JSON-LD from `<script type="application/ld+json">`
-- OpenGraph meta tags (`og:title`, `og:image`, `og:price:amount`)
-- CSS heuristic selectors with fallback chains
-- BFS link discovery from homepage
+### Tier 3: OpenGraph meta tags
+- Extract `og:title`, `og:image`, `og:price:amount` etc.
+- Works on ~80% of sites with social sharing tags
+- Zero cost
+
+### Tier 4: Auto-generated CSS (LLM generates selectors once per domain, cached)
+- Use crawl4ai `generate_schema()` to auto-create CSS selectors from sample HTML
+- Cache generated schema per domain — reuse for all subsequent pages for free
+- One-time LLM cost ~$0.01 per domain
+
+### Tier 5: LLM extraction (universal fallback — works on ANY website)
+- Use crawl4ai `LLMExtractionStrategy` with Pydantic product schema
+- `fit_markdown` pre-processing reduces tokens by 40-60%
+- Providers: OpenAI gpt-4o-mini, Groq (free tier), Ollama (local/free)
+- Cost: ~$0.01/page with gpt-4o-mini
 
 ## Platform Detection (priority order)
 
@@ -179,6 +189,9 @@ merchant_onboarding/
 │   │   ├── css_extractor.py          # ONLY extracts via crawl4ai JsonCssExtractionStrategy
 │   │   ├── schema_org_extractor.py   # ONLY extracts JSON-LD structured data
 │   │   ├── opengraph_extractor.py    # ONLY extracts OG meta tags
+│   │   ├── llm_extractor.py          # Universal LLM-based extraction (any website)
+│   │   ├── smart_css_extractor.py    # Auto-generates CSS selectors per domain via LLM
+│   │   ├── schema_cache.py           # Caches auto-generated CSS schemas per domain
 │   │   └── schemas/                  # CSS selector schemas per platform
 │   │       ├── shopify.py
 │   │       ├── woocommerce.py
@@ -268,6 +281,9 @@ class Product(BaseModel):
 | `WooCommerceAPIExtractor` | Fetches WooCommerce Store API, returns raw dicts. No normalization. |
 | `MagentoAPIExtractor` | Fetches Magento REST API, returns raw dicts. No normalization. |
 | `CSSExtractor` | Takes URL + CSS schema, returns raw extracted data via crawl4ai. |
+| `SmartCSSExtractor` | Auto-generates CSS selectors per domain via LLM, caches, reuses. |
+| `LLMExtractor` | Universal fallback — uses LLMExtractionStrategy with Pydantic schema. |
+| `SchemaCache` | Caches auto-generated CSS schemas per domain (Redis-backed). |
 | `SchemaOrgExtractor` | Parses JSON-LD from HTML, returns structured dict. |
 | `OpenGraphExtractor` | Parses OG meta tags from HTML, returns dict. |
 | `ProductNormalizer` | Takes raw data from ANY extractor, returns unified `Product`. |
@@ -294,6 +310,25 @@ class Product(BaseModel):
 - Shopify `/products.json` max 250/request, paginate with `?page=N`
 - WooCommerce Store API is public (no auth), REST v3 API requires auth
 
+### LLM Extraction
+- `LLMExtractionStrategy(llm_config=LLMConfig(...), schema=Model.model_json_schema())`
+- `extraction_type="schema"` validates output against Pydantic model
+- `input_format="fit_markdown"` reduces tokens 40-60% — always use this
+- `chunk_token_threshold=3000`, `overlap_rate=0.1` for auto-chunking
+- Providers via LiteLLM: `openai/gpt-4o-mini`, `groq/llama-3.1-70b-versatile`, `ollama/llama2`
+- Track tokens with `strategy.show_usage()`
+
+### Schema Auto-Generation
+- `JsonCssExtractionStrategy.generate_schema(html, schema_type="CSS", llm_config=...)`
+- One-time LLM call generates reusable CSS selectors for a domain
+- Known issue: single-sample generation can produce brittle selectors (nth-child)
+- Mitigation: provide multiple HTML samples, prefer attribute/text-anchored selectors
+
+### Known Bugs (avoid)
+- `CosineStrategy` returns empty results (GitHub #1424) — do not use
+- `LLMExtractionStrategy` skipped when `cache_mode=ENABLED` (#1455) — use `cache_mode="bypass"`
+- `generate_schema()` produces brittle selectors from single samples (#1672)
+
 ## Development Rules
 
 - `async/await` everywhere — crawl4ai, asyncpg, Redis are all async
@@ -304,3 +339,9 @@ class Product(BaseModel):
 - Log every crawl (success/failure, URL, duration, products found)
 - Never store raw HTML in database
 - Tests must cover: extractors (unit), pipeline (integration), API (e2e)
+
+## Git Rules
+
+- Never add `Co-Authored-By` lines or any watermarks in commit messages
+- Keep commit messages concise and descriptive — focus on what changed and why
+- No emoji in commit messages

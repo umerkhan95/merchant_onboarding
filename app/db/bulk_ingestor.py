@@ -1,0 +1,132 @@
+"""Bulk product ingestion using staging table pattern."""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import TYPE_CHECKING
+
+from app.db.queries import CREATE_STAGING_TABLE, UPSERT_FROM_STAGING
+
+if TYPE_CHECKING:
+    from app.db.supabase_client import DatabaseClient
+    from app.models.product import Product
+
+logger = logging.getLogger(__name__)
+
+
+class BulkIngestor:
+    """Handles bulk product upserts using staging table pattern."""
+
+    BATCH_SIZE = 500
+
+    def __init__(self, db: DatabaseClient):
+        """Initialize bulk ingestor.
+
+        Args:
+            db: DatabaseClient instance with active connection pool
+        """
+        self.db = db
+
+    async def ingest(self, products: list[Product]) -> int:
+        """Bulk upsert products using staging table pattern.
+
+        Strategy:
+        1. Create temporary staging table
+        2. Batch insert products into staging
+        3. Upsert from staging to products table
+        4. Return number of affected rows
+
+        Args:
+            products: List of Product models to ingest
+
+        Returns:
+            int: Number of products inserted or updated
+
+        Raises:
+            RuntimeError: If database operation fails
+        """
+        if not products:
+            logger.info("No products to ingest")
+            return 0
+
+        total_affected = 0
+
+        # Process in batches to avoid memory issues
+        for i in range(0, len(products), self.BATCH_SIZE):
+            batch = products[i : i + self.BATCH_SIZE]
+            affected = await self._ingest_batch(batch)
+            total_affected += affected
+            logger.info(f"Ingested batch {i // self.BATCH_SIZE + 1}: {affected} products affected")
+
+        logger.info(f"Bulk ingest complete. Total products affected: {total_affected}")
+        return total_affected
+
+    async def _ingest_batch(self, products: list[Product]) -> int:
+        """Ingest a single batch of products.
+
+        Args:
+            products: Batch of products to ingest
+
+        Returns:
+            int: Number of products affected in this batch
+
+        Raises:
+            RuntimeError: If database operation fails
+        """
+        async with self.db.pool.acquire() as conn, conn.transaction():
+            try:
+                # Create staging table
+                await conn.execute(CREATE_STAGING_TABLE)
+
+                # Prepare batch data
+                staging_data = [
+                    (
+                        p.external_id,
+                        p.shop_id,
+                        p.platform.value,
+                        p.title,
+                        p.description,
+                        p.price,
+                        p.compare_at_price,
+                        p.currency,
+                        p.image_url,
+                        p.product_url,
+                        p.sku,
+                        p.vendor,
+                        p.product_type,
+                        p.in_stock,
+                        json.dumps([v.model_dump(mode="json") for v in p.variants]),
+                        json.dumps(p.tags),
+                        json.dumps(p.raw_data),
+                        p.scraped_at,
+                        p.idempotency_key,
+                    )
+                    for p in products
+                ]
+
+                # Batch insert into staging table (ON CONFLICT to handle dups within batch)
+                await conn.executemany(
+                    """
+                    INSERT INTO staging_products (
+                        external_id, shop_id, platform, title, description, price,
+                        compare_at_price, currency, image_url, product_url, sku,
+                        vendor, product_type, in_stock, variants, tags, raw_data,
+                        scraped_at, idempotency_key
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    """,
+                    staging_data,
+                )
+
+                # Upsert from staging to products table
+                result = await conn.execute(UPSERT_FROM_STAGING)
+
+                # Parse affected rows from result string (e.g., "INSERT 0 42")
+                affected_count = int(result.split()[-1]) if result else 0
+
+                return affected_count
+
+            except Exception as e:
+                logger.error(f"Bulk ingest batch failed: {e}")
+                raise RuntimeError(f"Failed to ingest product batch: {e}") from e
