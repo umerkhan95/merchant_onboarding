@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings
 
 
@@ -39,6 +41,29 @@ class Settings(BaseSettings):
     crawl_batch_size: int = 50
     circuit_breaker_threshold: int = 5
     circuit_breaker_timeout: int = 60
+
+    # LLM Extraction
+    llm_provider: str = "openai/gpt-4o-mini"
+    llm_api_key: str = ""
+    llm_temperature: float = 0.2
+    llm_max_tokens: int = 4000
+    schema_cache_ttl: int = 604800  # 7 days in seconds
+
+    def create_llm_config(self):
+        """Create a crawl4ai LLMConfig from settings.
+
+        Returns:
+            LLMConfig instance or None if no API key configured.
+        """
+        if not self.llm_api_key:
+            return None
+
+        from crawl4ai import LLMConfig
+
+        return LLMConfig(
+            provider=self.llm_provider,
+            api_token=self.llm_api_key,
+        )
 
 
 settings = Settings()

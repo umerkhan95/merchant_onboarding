@@ -21,6 +21,9 @@ from app.config import settings
 from app.db.bulk_ingestor import BulkIngestor
 from app.db.supabase_client import DatabaseClient
 from app.db.queries import CREATE_PRODUCTS_TABLE
+from app.extractors.llm_extractor import LLMExtractor
+from app.extractors.schema_cache import SchemaCache
+from app.extractors.smart_css_extractor import SmartCSSExtractor
 from app.infra.circuit_breaker import CircuitBreaker
 from app.infra.progress_tracker import ProgressTracker
 from app.infra.rate_limiter import RateLimiter
@@ -108,12 +111,30 @@ async def run_single_test(
     # Initialize bulk ingestor (if db available)
     bulk_ingestor = BulkIngestor(db_client) if db_client else None
 
+    # Initialize LLM extractors (if API key configured)
+    smart_css_extractor = None
+    llm_extractor = None
+    llm_config = settings.create_llm_config()
+    if llm_config:
+        logger.info(f"LLM configured: {settings.llm_provider}")
+        schema_cache = SchemaCache(redis_client=redis_client, ttl=settings.schema_cache_ttl)
+        smart_css_extractor = SmartCSSExtractor(llm_config=llm_config, schema_cache=schema_cache)
+        llm_extractor = LLMExtractor(
+            llm_config=llm_config,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+        )
+    else:
+        logger.info("No LLM API key configured — SmartCSS and LLM tiers disabled")
+
     # Create pipeline
     pipeline = Pipeline(
         progress_tracker=progress_tracker,
         circuit_breaker=circuit_breaker,
         rate_limiter=rate_limiter,
         bulk_ingestor=bulk_ingestor,
+        smart_css_extractor=smart_css_extractor,
+        llm_extractor=llm_extractor,
     )
 
     result = {

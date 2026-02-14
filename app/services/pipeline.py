@@ -24,6 +24,8 @@ from app.services.url_discovery import URLDiscoveryService
 
 if TYPE_CHECKING:
     from app.db.bulk_ingestor import BulkIngestor
+    from app.extractors.llm_extractor import LLMExtractor
+    from app.extractors.smart_css_extractor import SmartCSSExtractor
     from app.infra.circuit_breaker import CircuitBreaker
     from app.infra.progress_tracker import ProgressTracker
     from app.infra.rate_limiter import RateLimiter
@@ -40,6 +42,8 @@ class Pipeline:
         circuit_breaker: CircuitBreaker,
         rate_limiter: RateLimiter,
         bulk_ingestor: BulkIngestor | None = None,
+        smart_css_extractor: SmartCSSExtractor | None = None,
+        llm_extractor: LLMExtractor | None = None,
     ):
         """Initialize pipeline with infrastructure components.
 
@@ -48,6 +52,8 @@ class Pipeline:
             circuit_breaker: Circuit breaker for fault tolerance
             rate_limiter: Per-domain rate limiter
             bulk_ingestor: Optional bulk ingestor for database operations
+            smart_css_extractor: Optional auto-generating CSS extractor (Tier 4)
+            llm_extractor: Optional universal LLM extractor (Tier 5)
         """
         self.detector = PlatformDetector()
         self.discovery = URLDiscoveryService()
@@ -56,6 +62,8 @@ class Pipeline:
         self.circuit_breaker = circuit_breaker
         self.rate_limiter = rate_limiter
         self.ingestor = bulk_ingestor
+        self.smart_css = smart_css_extractor
+        self.llm_extractor = llm_extractor
 
     async def run(self, job_id: str, shop_url: str) -> dict:
         """Run the full pipeline: detect → discover → extract → normalize → ingest.
@@ -245,9 +253,9 @@ class Pipeline:
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
-            # Fallback to CSS extraction on discovered URLs if API returned nothing
+            # Fallback to full chain on discovered URLs if API returned nothing
             if not raw_products and urls:
-                logger.info("WooCommerce API returned 0 products, falling back to CSS on discovered URLs")
+                logger.info("WooCommerce API returned 0 products, falling back to extraction chain")
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
                     urls, shop_url, job_id
                 )
@@ -258,15 +266,14 @@ class Pipeline:
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
-            # Fallback to CSS extraction on discovered URLs if API returned nothing
+            # Fallback to full chain on discovered URLs if API returned nothing
             if not raw_products and urls:
-                logger.info("Magento API returned 0 products, falling back to CSS on discovered URLs")
+                logger.info("Magento API returned 0 products, falling back to extraction chain")
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
                     urls, shop_url, job_id
                 )
 
         elif platform == Platform.BIGCOMMERCE:
-            # BigCommerce: CSS extraction on discovered URLs
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
                 urls, shop_url, job_id, css_schema=BIGCOMMERCE_SCHEMA
             )
@@ -285,7 +292,14 @@ class Pipeline:
         job_id: str,
         css_schema: dict | None = None,
     ) -> tuple[list[dict], ExtractionTier]:
-        """Try extraction strategies in order: Schema.org → OpenGraph → CSS.
+        """Try extraction strategies in order: Schema.org → OG → CSS → SmartCSS → LLM.
+
+        5-tier fallback (Tiers 2-5, Tier 1 is platform API handled above):
+        - Tier 2: Schema.org JSON-LD
+        - Tier 3: OpenGraph meta tags
+        - Tier 4: SmartCSS (auto-generated selectors, cached per domain)
+        - Tier 5: LLM extraction (universal fallback)
+        Falls back to hardcoded CSS if no LLM extractors configured.
 
         Args:
             urls: List of URLs to extract from
@@ -299,25 +313,45 @@ class Pipeline:
         if not urls:
             return [], ExtractionTier.DEEP_CRAWL
 
-        # Try Schema.org on first URL
+        probe_url = urls[0]
+
+        # Tier 2: Schema.org on first URL
         schema_extractor = SchemaOrgExtractor()
-        schema_products = await self._extract_with_circuit_breaker(schema_extractor, urls[0], shop_url)
+        schema_products = await self._extract_with_circuit_breaker(schema_extractor, probe_url, shop_url)
         if schema_products:
             logger.info("Schema.org extraction successful, extracting from all URLs")
             products = await self._extract_from_urls(schema_extractor, urls, shop_url, job_id)
             return products, ExtractionTier.SITEMAP_CSS
 
-        # Try OpenGraph on first URL
+        # Tier 3: OpenGraph on first URL
         og_extractor = OpenGraphExtractor()
-        og_products = await self._extract_with_circuit_breaker(og_extractor, urls[0], shop_url)
+        og_products = await self._extract_with_circuit_breaker(og_extractor, probe_url, shop_url)
         if og_products:
             logger.info("OpenGraph extraction successful, extracting from all URLs")
             products = await self._extract_from_urls(og_extractor, urls, shop_url, job_id)
             return products, ExtractionTier.SITEMAP_CSS
 
-        # Fallback to CSS extraction
+        # Tier 4: SmartCSS (auto-generated selectors, if configured)
+        if self.smart_css:
+            logger.info("Trying SmartCSS extraction (auto-generated selectors)")
+            smart_products = await self._extract_with_circuit_breaker(self.smart_css, probe_url, shop_url)
+            if smart_products:
+                logger.info("SmartCSS extraction successful, extracting from all URLs")
+                products = await self._extract_from_urls(self.smart_css, urls, shop_url, job_id)
+                return products, ExtractionTier.SMART_CSS
+
+        # Tier 5: LLM extraction (universal fallback, if configured)
+        if self.llm_extractor:
+            logger.info("Trying LLM extraction (universal fallback)")
+            llm_products = await self._extract_with_circuit_breaker(self.llm_extractor, probe_url, shop_url)
+            if llm_products:
+                logger.info("LLM extraction successful, extracting from all URLs")
+                products = await self._extract_from_urls(self.llm_extractor, urls, shop_url, job_id)
+                return products, ExtractionTier.LLM
+
+        # Fallback: hardcoded CSS (for when no LLM is configured)
         schema = css_schema or GENERIC_SCHEMA
-        logger.info("Falling back to CSS extraction")
+        logger.info("Falling back to hardcoded CSS extraction")
         css_extractor = CSSExtractor(schema)
         products = await self._extract_from_urls(css_extractor, urls, shop_url, job_id)
         return products, ExtractionTier.DEEP_CRAWL

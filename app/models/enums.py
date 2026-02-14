@@ -34,3 +34,5 @@ class ExtractionTier(StrEnum):
     API = "api"
     SITEMAP_CSS = "sitemap_css"
     DEEP_CRAWL = "deep_crawl"
+    SMART_CSS = "smart_css"
+    LLM = "llm"
