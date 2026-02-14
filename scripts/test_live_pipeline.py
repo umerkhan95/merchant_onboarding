@@ -74,6 +74,37 @@ TEST_SHOPS = {
         "expected_platform": "shopify",
         "description": "Ory Berlin Shopify store",
     },
+    # --- Hard-to-scrape sites (anti-bot, SPA, custom platforms) ---
+    "nordstrom": {
+        "url": "https://www.nordstrom.com",
+        "expected_platform": "generic",
+        "description": "Custom React SPA + proprietary anti-bot + fingerprinting",
+    },
+    "fashionphile": {
+        "url": "https://www.fashionphile.com",
+        "expected_platform": "shopify",
+        "description": "Shopify (disguised) + TLS fingerprinting + anti-bot",
+    },
+    "farfetch": {
+        "url": "https://www.farfetch.com",
+        "expected_platform": "generic",
+        "description": "Custom SPA + proprietary anti-bot + 1300 boutiques",
+    },
+    "stockx": {
+        "url": "https://www.stockx.com",
+        "expected_platform": "generic",
+        "description": "React/Next.js + PerimeterX + Akamai + GraphQL",
+    },
+    "goat": {
+        "url": "https://www.goat.com",
+        "expected_platform": "generic",
+        "description": "SPA + Cloudflare Bot Management + infinite scroll",
+    },
+    "vestiaire": {
+        "url": "https://www.vestiairecollective.com",
+        "expected_platform": "generic",
+        "description": "Next.js + Cloudflare WAF + aggressive rate limiting",
+    },
 }
 
 
