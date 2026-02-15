@@ -1,6 +1,7 @@
 """Evaluation runner — orchestrates extractor runs and scoring.
 
 Supported extraction tiers:
+    0. shopify_api - Extract via Shopify /products.json API (free, Shopify-only)
     1. schema_org - Extract from JSON-LD structured data (free)
     2. opengraph - Extract from OpenGraph meta tags (free)
     3. css_generic - Extract via generic CSS selectors (free)
@@ -9,6 +10,7 @@ Supported extraction tiers:
 
 Default tiers (free): schema_org, opengraph, css_generic
 All tiers (requires LLM_API_KEY): schema_org, opengraph, css_generic, smart_css, llm
+Platform-specific: shopify_api (must be requested explicitly via --tier shopify_api)
 """
 
 from __future__ import annotations
@@ -163,6 +165,18 @@ class EvalRunner:
                 if snapshot_html and not self.force_live:
                     # Offline extraction from single snapshot
                     extracted_products = self._extract_offline(tier_name, snapshot_html, test_case.url)
+                elif tier_name == "shopify_api":
+                    # Shopify API: extract ALL products from shop URL, then flatten
+                    raw_products = await extractor.extract(test_case.url)
+                    extracted_products = [
+                        self._flatten_shopify_product(p, test_case.url)
+                        for p in raw_products
+                    ]
+                    logger.info(
+                        "Shopify API returned %d products, flattened to %d",
+                        len(raw_products),
+                        len(extracted_products),
+                    )
                 else:
                     # Live extraction — use individual product URLs when available
                     product_urls = self._get_product_urls(test_case)
@@ -234,6 +248,54 @@ class EvalRunner:
                 estimated_cost_usd=estimated_cost,
             )
 
+    @staticmethod
+    def _flatten_shopify_product(product: dict, shop_url: str) -> dict:
+        """Flatten a Shopify API product dict into scorer-compatible format.
+
+        Shopify products have nested variants/images. This extracts the
+        primary variant's price/sku/availability and constructs product_url
+        from the handle.
+        """
+        flat: dict[str, str] = {}
+
+        if product.get("title"):
+            flat["title"] = product["title"]
+        if product.get("vendor"):
+            flat["vendor"] = product["vendor"]
+        if product.get("product_type"):
+            flat["product_type"] = product["product_type"]
+        if product.get("body_html"):
+            flat["description"] = product["body_html"]
+
+        # Construct product URL from handle
+        handle = product.get("handle")
+        if handle:
+            flat["product_url"] = f"{shop_url.rstrip('/')}/products/{handle}"
+
+        # Primary image
+        images = product.get("images") or []
+        if images:
+            src = images[0].get("src")
+            if src:
+                flat["image_url"] = src
+
+        # Shop currency (injected by ShopifyAPIExtractor from cart_currency cookie)
+        if product.get("_shop_currency"):
+            flat["currency"] = product["_shop_currency"]
+
+        # First variant: price, sku, availability
+        variants = product.get("variants") or []
+        if variants:
+            v = variants[0]
+            if v.get("price"):
+                flat["price"] = v["price"]
+            if v.get("sku"):
+                flat["sku"] = v["sku"]
+            if "available" in v:
+                flat["in_stock"] = str(v["available"]).lower()
+
+        return flat
+
     def _create_extractor(self, tier_name: str):
         """Create an extractor instance for the given tier name.
 
@@ -247,7 +309,12 @@ class EvalRunner:
             ValueError: If tier_name is unknown
             ImportError: If tier dependencies are missing
         """
-        if tier_name == "schema_org":
+        if tier_name == "shopify_api":
+            from app.extractors.shopify_api import ShopifyAPIExtractor
+
+            return ShopifyAPIExtractor(max_pages=5)
+
+        elif tier_name == "schema_org":
             from app.extractors.schema_org_extractor import SchemaOrgExtractor
 
             return SchemaOrgExtractor()

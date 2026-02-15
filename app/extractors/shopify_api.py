@@ -37,6 +37,7 @@ class ShopifyAPIExtractor(BaseExtractor):
         """
         all_products: list[dict[str, Any]] = []
         base_url = shop_url.rstrip("/")
+        shop_currency: str | None = None
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             page = 1
@@ -80,6 +81,12 @@ class ShopifyAPIExtractor(BaseExtractor):
                         logger.error(f"Invalid JSON on page {page}: {e}, returning what we have")
                         break
 
+                    # Grab shop currency from cart_currency cookie (first response)
+                    if shop_currency is None:
+                        shop_currency = response.cookies.get("cart_currency")
+                        if shop_currency:
+                            logger.info(f"Detected shop currency: {shop_currency}")
+
                     # Extract products from response
                     products = data.get("products", [])
                     products_count = len(products)
@@ -107,6 +114,11 @@ class ShopifyAPIExtractor(BaseExtractor):
                 except Exception as e:
                     logger.error(f"Unexpected error on page {page}: {e}, returning what we have")
                     break
+
+        # Inject shop currency into each product (from cart_currency cookie)
+        if shop_currency:
+            for product in all_products:
+                product["_shop_currency"] = shop_currency
 
         logger.info(f"Extraction complete: {len(all_products)} total products from {page - 1} pages")
         return all_products
