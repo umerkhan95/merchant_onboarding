@@ -1,0 +1,84 @@
+name: Extraction Benchmarks
+
+on:
+  pull_request:
+    paths:
+      - 'app/extractors/**'
+      - 'app/services/pipeline.py'
+      - 'app/services/url_discovery.py'
+      - 'evals/**'
+      - 'tests/unit/test_scorer.py'
+      - 'tests/unit/test_baseline.py'
+      - 'tests/unit/test_completeness.py'
+      - 'tests/unit/test_profiling.py'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Run live evaluation (hits real URLs)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  unit-tests:
+    name: Eval Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Run eval unit tests
+        run: uv run python -m pytest tests/unit/test_scorer.py tests/unit/test_baseline.py tests/unit/test_completeness.py tests/unit/test_profiling.py -v
+
+  benchmark-offline:
+    name: Offline Benchmarks
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: ${{ !inputs.live }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Run offline evaluations
+        run: uv run python -m evals --offline --json > eval_results.json 2>&1 || true
+      - name: Check for regressions
+        run: uv run python -m evals --offline --check-regression
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval_results.json
+
+  benchmark-live:
+    name: Live Benchmarks
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: ${{ inputs.live == true || inputs.live == 'true' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Install Playwright browsers
+        run: uv run playwright install chromium
+      - name: Run live evaluations
+        run: uv run python -m evals --live --profile --json > eval_results.json
+      - name: Save baseline
+        if: github.ref == 'refs/heads/main'
+        run: uv run python -m evals --live --save-baseline
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-live
+          path: eval_results.json
