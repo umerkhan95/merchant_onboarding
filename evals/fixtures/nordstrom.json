@@ -9,21 +9,24 @@
       "price": "115.00",
       "currency": "USD",
       "vendor": "Nike",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.nordstrom.com/s/nike-dunk-low-retro-sneaker-men/6501670"
     },
     {
       "title": "Birkenstock Arizona Slide Sandal",
       "price": "110.00",
       "currency": "USD",
       "vendor": "Birkenstock",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.nordstrom.com/s/birkenstock-arizona-slide-sandal-men/3849922"
     },
     {
       "title": "UGG Classic Mini II Genuine Shearling Lined Boot",
       "price": "150.00",
       "currency": "USD",
       "vendor": "UGG",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.nordstrom.com/s/ugg-classic-mini-ii-genuine-shearling-lined-boot-women/4222772"
     }
   ]
 }

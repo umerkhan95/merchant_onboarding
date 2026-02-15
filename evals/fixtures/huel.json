@@ -9,21 +9,24 @@
       "price": "49.99",
       "currency": "USD",
       "vendor": "Huel",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://huel.com/products/huel-black-edition"
     },
     {
       "title": "Huel Daily Greens",
       "price": "36.00",
       "currency": "USD",
       "vendor": "Huel",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://huel.com/products/daily-greens"
     },
     {
       "title": "Huel Complete Protein",
       "price": "36.00",
       "currency": "USD",
       "vendor": "Huel",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://huel.com/products/complete-protein"
     }
   ]
 }

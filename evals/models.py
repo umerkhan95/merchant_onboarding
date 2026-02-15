@@ -32,12 +32,18 @@ FIELD_MATCH_TYPES: dict[str, MatchType] = {
 }
 
 # Common field name aliases in raw extraction data.
-FIELD_ALIASES: dict[str, str] = {
-    "vendor": "brand",
-    "image_url": "image",
-    "product_url": "url",
-    "product_type": "category",
-    "in_stock": "availability",
+# Maps canonical_field → list of aliases found in raw extractor output.
+FIELD_ALIASES: dict[str, list[str]] = {
+    "title": ["og:title", "name", "product_name"],
+    "price": ["og:price:amount", "product:price:amount", "amount"],
+    "currency": ["og:price:currency", "product:price:currency", "priceCurrency"],
+    "description": ["og:description", "product:description"],
+    "image_url": ["image", "og:image", "og:image:secure_url", "product:image"],
+    "vendor": ["brand", "og:brand", "product:brand", "manufacturer"],
+    "in_stock": ["availability", "og:availability", "product:availability"],
+    "sku": ["product:sku", "mpn"],
+    "product_type": ["category", "og:type", "product:category"],
+    "product_url": ["url", "og:url", "product:url", "canonical"],
 }
 
 

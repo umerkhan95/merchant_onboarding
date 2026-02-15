@@ -6,7 +6,7 @@
   "products": [
     {
       "title": "Men's Tree Runners",
-      "price": "98.00",
+      "price": "100.00",
       "currency": "USD",
       "vendor": "Allbirds",
       "in_stock": true,
@@ -14,7 +14,7 @@
     },
     {
       "title": "Women's Tree Runners",
-      "price": "98.00",
+      "price": "100.00",
       "currency": "USD",
       "vendor": "Allbirds",
       "in_stock": true,
@@ -37,12 +37,12 @@
       "product_url": "https://www.allbirds.com/products/womens-wool-runners"
     },
     {
-      "title": "Men's Tree Dashers",
-      "price": "135.00",
+      "title": "Men's Dasher NZ",
+      "price": "140.00",
       "currency": "USD",
       "vendor": "Allbirds",
       "in_stock": true,
-      "product_url": "https://www.allbirds.com/products/mens-tree-dashers"
+      "product_url": "https://www.allbirds.com/products/mens-dasher-nz"
     }
   ]
 }

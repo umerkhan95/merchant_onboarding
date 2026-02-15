@@ -9,21 +9,24 @@
       "price": "98.00",
       "currency": "USD",
       "vendor": "lululemon",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://shop.lululemon.com/p/womens-leggings/Align-Pant-2/_/prod2020012"
     },
     {
       "title": "Scuba Oversized Half-Zip Hoodie",
       "price": "118.00",
       "currency": "USD",
       "vendor": "lululemon",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://shop.lululemon.com/p/womens-outerwear/Scuba-Oversized-12-Zip-Hoodie/_/prod9960807"
     },
     {
       "title": "ABC Slim-Fit Pant 32\" Warpstreme",
       "price": "128.00",
       "currency": "USD",
       "vendor": "lululemon",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://shop.lululemon.com/p/men-pants/ABC-Pant-Slim-Warpstreme/_/prod8530241"
     }
   ]
 }

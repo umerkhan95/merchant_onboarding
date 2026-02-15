@@ -219,8 +219,14 @@ class Scorer:
 
             # If not found, try aliases
             if extracted_value is None and field_name in FIELD_ALIASES:
-                alias = FIELD_ALIASES[field_name]
-                extracted_value = extracted.get(alias)
+                for alias in FIELD_ALIASES[field_name]:
+                    extracted_value = extracted.get(alias)
+                    if extracted_value is not None:
+                        break
+
+            # Flatten JSON-LD nested objects (e.g. {"@type": "Brand", "name": "Nike"} → "Nike")
+            if isinstance(extracted_value, dict):
+                extracted_value = extracted_value.get("name") or extracted_value.get("value") or str(extracted_value)
 
             # Convert to string for comparison (except None)
             if extracted_value is not None:
@@ -229,9 +235,10 @@ class Scorer:
             field_score = Scorer.score_field(field_name, expected_value, extracted_value)
             field_scores.append(field_score)
 
+        extracted_title = extracted.get("title") or extracted.get("og:title") or extracted.get("name")
         return ProductScore(
             expected_title=expected.title,
-            extracted_title=extracted.get("title"),
+            extracted_title=extracted_title,
             field_scores=field_scores,
         )
 
@@ -261,15 +268,31 @@ class Scorer:
 
             # Find best matching extracted product by title similarity
             for idx, ext_dict in enumerate(remaining_extracted):
-                ext_title = ext_dict.get("title", "")
+                ext_title = ext_dict.get("title") or ext_dict.get("og:title") or ext_dict.get("name", "")
                 if not ext_title:
                     continue
 
-                title_similarity = SequenceMatcher(
-                    None,
-                    exp_product.title.lower(),
-                    str(ext_title).lower(),
-                ).ratio()
+                exp_lower = exp_product.title.lower()
+                ext_lower = str(ext_title).lower()
+
+                # Use the higher of: SequenceMatcher ratio, or containment check.
+                # Long OG titles like "Product - Description | Brand" tank SequenceMatcher
+                # but the expected title "Product" is clearly contained.
+                seq_score = SequenceMatcher(None, exp_lower, ext_lower).ratio()
+
+                # Containment: if expected is a substring of extracted (or vice versa),
+                # score based on length ratio of shorter/longer
+                if exp_lower in ext_lower:
+                    containment_score = len(exp_lower) / len(ext_lower)
+                    # Boost: contained match should score at least 0.6
+                    containment_score = max(containment_score, 0.6)
+                elif ext_lower in exp_lower:
+                    containment_score = len(ext_lower) / len(exp_lower)
+                    containment_score = max(containment_score, 0.6)
+                else:
+                    containment_score = 0.0
+
+                title_similarity = max(seq_score, containment_score)
 
                 # Threshold 0.5 for a match
                 if title_similarity >= 0.5 and title_similarity > best_score:

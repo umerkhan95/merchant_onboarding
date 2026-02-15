@@ -1,29 +1,35 @@
 {
   "name": "Skullcandy",
   "url": "https://www.skullcandy.com",
-  "platform": "generic",
+  "platform": "shopify",
   "min_products": 30,
   "products": [
     {
       "title": "Crusher ANC 2",
-      "price": "199.99",
+      "price": "149.99",
       "currency": "USD",
       "vendor": "Skullcandy",
-      "in_stock": true
+      "in_stock": true,
+      "sku": "S6CAW-S987",
+      "product_url": "https://www.skullcandy.com/products/crusher-anc-2-sensory-bass-headphones-with-active-noise-canceling"
     },
     {
-      "title": "Indy ANC",
-      "price": "89.99",
+      "title": "Hesh 540 ANC",
+      "price": "159.99",
       "currency": "USD",
       "vendor": "Skullcandy",
-      "in_stock": true
+      "in_stock": true,
+      "sku": "S6HAW-T740",
+      "product_url": "https://www.skullcandy.com/products/hesh-540-anc-noise-canceling-headphones"
     },
     {
-      "title": "Hesh ANC",
+      "title": "Crusher Evo",
       "price": "99.99",
       "currency": "USD",
       "vendor": "Skullcandy",
-      "in_stock": true
+      "in_stock": true,
+      "sku": "S6EVW-N740",
+      "product_url": "https://www.skullcandy.com/products/crusher-evo-sensory-bass-headphones-with-personal-sound"
     }
   ]
 }

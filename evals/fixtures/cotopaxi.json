@@ -5,28 +5,28 @@
   "min_products": 20,
   "products": [
     {
-      "title": "Fuego Down Jacket - Men's",
-      "price": "200.00",
-      "currency": "USD",
-      "vendor": "Cotopaxi",
-      "in_stock": true,
-      "product_url": "https://www.cotopaxi.com/products/fuego-down-jacket-mens"
-    },
-    {
-      "title": "Fuego Down Jacket - Women's",
-      "price": "200.00",
-      "currency": "USD",
-      "vendor": "Cotopaxi",
-      "in_stock": true,
-      "product_url": "https://www.cotopaxi.com/products/fuego-down-jacket-womens"
-    },
-    {
       "title": "Allpa 35L Travel Pack",
-      "price": "200.00",
+      "price": "230.00",
       "currency": "USD",
       "vendor": "Cotopaxi",
       "in_stock": true,
-      "product_url": "https://www.cotopaxi.com/products/allpa-35l-travel-pack"
+      "product_url": "https://www.cotopaxi.com/products/allpa-35l-travel-pack-4"
+    },
+    {
+      "title": "Abrazo Fleece Full-Zip Jacket - Men's",
+      "price": "94.50",
+      "currency": "USD",
+      "vendor": "Cotopaxi",
+      "in_stock": true,
+      "product_url": "https://www.cotopaxi.com/products/abrazo-fleece-full-zip-jacket-mens-5"
+    },
+    {
+      "title": "Trozo 8L Shoulder Bag - Cada Dia",
+      "price": "35.00",
+      "currency": "USD",
+      "vendor": "Cotopaxi",
+      "in_stock": true,
+      "product_url": "https://www.cotopaxi.com/products/trozo-8l-shoulder-bag-cada-dia-5"
     }
   ]
 }

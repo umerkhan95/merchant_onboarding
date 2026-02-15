@@ -6,25 +6,27 @@
   "products": [
     {
       "title": "Arrival 5\" Shorts",
-      "price": "30.00",
+      "price": "26.00",
       "currency": "USD",
       "vendor": "Gymshark",
       "in_stock": true,
       "product_url": "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22"
     },
     {
-      "title": "Critical Zip Hoodie",
-      "price": "56.00",
+      "title": "Vital Regular Leggings",
+      "price": "54.00",
       "currency": "USD",
       "vendor": "Gymshark",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.gymshark.com/products/gymshark-vital-seamless-leggings-dark-green-marl-logo"
     },
     {
-      "title": "Vital Seamless 2.0 Leggings",
-      "price": "50.00",
+      "title": "Aspect Shorts",
+      "price": "35.00",
       "currency": "USD",
       "vendor": "Gymshark",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.gymshark.com/products/gymshark-aspect-shorts-light-green"
     }
   ]
 }

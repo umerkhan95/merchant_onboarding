@@ -5,25 +5,28 @@
   "min_products": 50,
   "products": [
     {
-      "title": "Men's Solids Calf Sock 4-Pack",
-      "price": "51.20",
+      "title": "Men's Friday Sandal",
+      "price": "54.00",
       "currency": "USD",
       "vendor": "Bombas",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://bombas.com/products/mens-friday-sandal"
     },
     {
-      "title": "Women's Gripper Ankle Sock 4-Pack",
-      "price": "51.20",
+      "title": "Women's Friday Sandal",
+      "price": "54.00",
       "currency": "USD",
       "vendor": "Bombas",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://bombas.com/products/womens-friday-sandal"
     },
     {
-      "title": "Men's Merino Wool Blend Calf Sock",
-      "price": "18.00",
+      "title": "Men's Friday Clog",
+      "price": "64.00",
       "currency": "USD",
       "vendor": "Bombas",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://bombas.com/products/mens-friday-clog"
     }
   ]
 }

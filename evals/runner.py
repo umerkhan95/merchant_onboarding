@@ -106,8 +106,22 @@ class EvalRunner:
         else:
             raise ValueError(f"Offline mode not supported for tier: {tier_name}")
 
+    def _get_product_urls(self, test_case: TestCase) -> list[str]:
+        """Get individual product URLs from test case expected products.
+
+        Falls back to the main test case URL if no product URLs are defined.
+        """
+        urls = []
+        for product in test_case.products:
+            if product.product_url:
+                urls.append(product.product_url)
+        return urls if urls else [test_case.url]
+
     async def _run_tier(self, tier_name: str, test_case: TestCase) -> TierResult:
         """Run a single tier extractor against a test case and score the results.
+
+        Extracts from individual product URLs when available in the fixture,
+        otherwise falls back to the main test case URL.
 
         Args:
             tier_name: Name of the tier to run
@@ -147,11 +161,24 @@ class EvalRunner:
                 start_time = time.monotonic()
 
                 if snapshot_html and not self.force_live:
-                    # Offline extraction
+                    # Offline extraction from single snapshot
                     extracted_products = self._extract_offline(tier_name, snapshot_html, test_case.url)
                 else:
-                    # Live extraction
-                    extracted_products = await extractor.extract(test_case.url)
+                    # Live extraction — use individual product URLs when available
+                    product_urls = self._get_product_urls(test_case)
+
+                    # Browser-based tiers benefit from batch extraction (one browser, many URLs)
+                    browser_tiers = {"css_generic", "smart_css", "llm"}
+                    if tier_name in browser_tiers and len(product_urls) > 1:
+                        extracted_products = await extractor.extract_batch(product_urls)
+                    else:
+                        extracted_products = []
+                        for url in product_urls:
+                            try:
+                                products = await extractor.extract(url)
+                                extracted_products.extend(products)
+                            except Exception as e:
+                                logger.warning("Extraction failed for %s: %s", url, e)
 
                 duration = time.monotonic() - start_time
 

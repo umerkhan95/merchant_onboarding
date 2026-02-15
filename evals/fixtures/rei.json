@@ -9,21 +9,24 @@
       "price": "139.00",
       "currency": "USD",
       "vendor": "Patagonia",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.rei.com/product/164553/patagonia-better-sweater-fleece-jacket-mens"
     },
     {
       "title": "The North Face ThermoBall Eco Jacket 2.0 - Men's",
       "price": "220.00",
       "currency": "USD",
       "vendor": "The North Face",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.rei.com/product/196851/the-north-face-thermoball-eco-jacket-20-mens"
     },
     {
       "title": "Osprey Atmos AG 65 Pack - Men's",
       "price": "300.00",
       "currency": "USD",
       "vendor": "Osprey",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.rei.com/product/168574/osprey-atmos-ag-65-pack-mens"
     }
   ]
 }
