@@ -180,8 +180,11 @@ async def run_single_test(
         pipeline_result = await pipeline.run(job_id, shop_url)
         elapsed = time.time() - start_time
 
+        needs_review = pipeline_result.get("needs_review", False)
+        review_reason = pipeline_result.get("review_reason", "")
+
         result.update({
-            "status": "success",
+            "status": "needs_review" if needs_review else "success",
             "platform": pipeline_result["platform"],
             "total_extracted": pipeline_result["total_extracted"],
             "total_normalized": pipeline_result["total_normalized"],
@@ -189,6 +192,8 @@ async def run_single_test(
             "extraction_tier": pipeline_result["extraction_tier"],
             "elapsed_seconds": round(elapsed, 2),
             "platform_match": pipeline_result["platform"] == shop_config["expected_platform"],
+            "needs_review": needs_review,
+            "review_reason": review_reason,
         })
 
         logger.info(f"\nRESULT for {shop_key}:")
@@ -197,6 +202,8 @@ async def run_single_test(
         logger.info(f"  Products extracted: {pipeline_result['total_extracted']}")
         logger.info(f"  Products normalized: {pipeline_result['total_normalized']}")
         logger.info(f"  Products ingested: {pipeline_result['total_ingested']}")
+        if needs_review:
+            logger.warning(f"  ⚠ NEEDS REVIEW: {review_reason}")
         logger.info(f"  Time: {elapsed:.2f}s")
 
     except Exception as e:
@@ -270,23 +277,26 @@ async def main(shop_filter: str | None = None, skip_ingest: bool = False):
     logger.info(f"\n{'='*60}")
     logger.info("TEST SUMMARY")
     logger.info(f"{'='*60}")
-    logger.info(f"{'Shop':<15} {'Status':<10} {'Platform':<15} {'Extracted':<12} {'Normalized':<12} {'Ingested':<10} {'Time':<8}")
-    logger.info("-" * 82)
+    logger.info(f"{'Shop':<15} {'Status':<14} {'Platform':<15} {'Extracted':<12} {'Normalized':<12} {'Tier':<14} {'Time':<8}")
+    logger.info("-" * 90)
 
     for r in results:
-        if r["status"] == "success":
+        if r["status"] in ("success", "needs_review"):
             platform_str = r.get("platform", "?")
             if not r.get("platform_match"):
                 platform_str += " (!)"
+            status_str = r["status"]
+            if r.get("needs_review"):
+                status_str = f"REVIEW({r.get('review_reason', '?')[:10]})"
             logger.info(
-                f"{r['shop']:<15} {r['status']:<10} {platform_str:<15} "
+                f"{r['shop']:<15} {status_str:<14} {platform_str:<15} "
                 f"{r.get('total_extracted', 0):<12} {r.get('total_normalized', 0):<12} "
-                f"{r.get('total_ingested', 0):<10} {r.get('elapsed_seconds', 0):<8}s"
+                f"{r.get('extraction_tier', '?'):<14} {r.get('elapsed_seconds', 0):<8}s"
             )
         else:
             error_short = (r.get("error") or "unknown")[:40]
             logger.info(
-                f"{r['shop']:<15} {'FAILED':<10} {error_short}"
+                f"{r['shop']:<15} {'FAILED':<14} {error_short}"
             )
 
     # Database totals

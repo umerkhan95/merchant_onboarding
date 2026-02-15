@@ -188,18 +188,19 @@ async def test_pipeline_generic_schema_org_fallback(pipeline, mock_progress_trac
             ]
 
             with patch("app.services.pipeline.SchemaOrgExtractor") as mock_extractor_class:
+                product_data = {
+                    "name": "Schema.org Product",
+                    "description": "Product description",
+                    "offers": {"price": "49.99", "priceCurrency": "USD"},
+                    "image": "https://example.com/image.jpg",
+                    "sku": "SKU123",
+                }
                 mock_extractor = AsyncMock()
-                # First call returns data (probe), subsequent calls also return data
-                mock_extractor.extract = AsyncMock(
-                    return_value=[
-                        {
-                            "name": "Schema.org Product",
-                            "description": "Product description",
-                            "offers": {"price": "49.99", "priceCurrency": "USD"},
-                            "image": "https://example.com/image.jpg",
-                            "sku": "SKU123",
-                        }
-                    ]
+                # extract() used for probe call
+                mock_extractor.extract = AsyncMock(return_value=[product_data])
+                # extract_batch() used for full extraction
+                mock_extractor.extract_batch = AsyncMock(
+                    return_value=[product_data, product_data]
                 )
                 mock_extractor_class.return_value = mock_extractor
 
@@ -227,7 +228,7 @@ async def test_pipeline_detection_failure(pipeline, mock_progress_tracker):
 
 @pytest.mark.asyncio
 async def test_pipeline_extraction_failure(pipeline, mock_progress_tracker):
-    """Test pipeline handles extraction failure gracefully."""
+    """Test pipeline handles extraction failure — 0 products triggers needs_review."""
     with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
         mock_detect.return_value = PlatformResult(
             platform=Platform.SHOPIFY,
@@ -243,17 +244,22 @@ async def test_pipeline_extraction_failure(pipeline, mock_progress_tracker):
                 mock_extractor.extract = AsyncMock(side_effect=Exception("Extraction failed"))
                 mock_extractor_class.return_value = mock_extractor
 
-                # Circuit breaker will catch the error and return empty list
+                # Circuit breaker catches error → 0 products → validation fails → needs_review
                 result = await pipeline.run("job-error", "https://example.com")
 
-                # Should complete but with 0 products
                 assert result["total_extracted"] == 0
                 assert result["total_normalized"] == 0
+                assert result["needs_review"] is True
+                assert result["review_reason"] == "zero_products"
+
+                # Status should be NEEDS_REVIEW, not COMPLETED
+                last_call = mock_progress_tracker.update.call_args_list[-1]
+                assert last_call[1]["status"] == JobStatus.NEEDS_REVIEW
 
 
 @pytest.mark.asyncio
 async def test_pipeline_no_urls_discovered(pipeline, mock_progress_tracker):
-    """Test pipeline when no URLs are discovered."""
+    """Test pipeline when no URLs discovered — triggers needs_review."""
     with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
         mock_detect.return_value = PlatformResult(
             platform=Platform.SHOPIFY,
@@ -269,10 +275,12 @@ async def test_pipeline_no_urls_discovered(pipeline, mock_progress_tracker):
             assert result["total_extracted"] == 0
             assert result["total_normalized"] == 0
             assert result["total_ingested"] == 0
+            assert result["needs_review"] is True
+            assert result["review_reason"] == "no_urls_discovered"
 
-            # Should complete successfully
+            # Status should be NEEDS_REVIEW, not silently COMPLETED
             last_call = mock_progress_tracker.update.call_args_list[-1]
-            assert last_call[1]["status"] == JobStatus.COMPLETED
+            assert last_call[1]["status"] == JobStatus.NEEDS_REVIEW
 
 
 @pytest.mark.asyncio
@@ -427,17 +435,17 @@ async def test_pipeline_bigcommerce_css_extraction(pipeline, mock_progress_track
                 mock_og.extract = AsyncMock(return_value=[])
                 mock_og_class.return_value = mock_og
 
+                bc_product = {
+                    "title": "BigCommerce Product",
+                    "price": "$29.99",
+                    "description": "Product description",
+                    "image": "https://example.com/image.jpg",
+                    "sku": "BC-123",
+                }
                 mock_css = AsyncMock()
-                mock_css.extract = AsyncMock(
-                    return_value=[
-                        {
-                            "title": "BigCommerce Product",
-                            "price": "$29.99",
-                            "description": "Product description",
-                            "image": "https://example.com/image.jpg",
-                            "sku": "BC-123",
-                        }
-                    ]
+                mock_css.extract = AsyncMock(return_value=[bc_product])
+                mock_css.extract_batch = AsyncMock(
+                    return_value=[bc_product, bc_product]
                 )
                 mock_css_class.return_value = mock_css
 
@@ -446,3 +454,143 @@ async def test_pipeline_bigcommerce_css_extraction(pipeline, mock_progress_track
                 assert result["platform"] == "bigcommerce"
                 assert result["total_extracted"] == 2  # 2 URLs
                 assert result["extraction_tier"] == "deep_crawl"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_skips_low_quality_probe(pipeline, mock_progress_tracker):
+    """Test that fallback chain skips tiers where probe quality is too low."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.GENERIC,
+            confidence=1.0,
+            signals=["fallback:no-signals-detected"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = [
+                "https://example.com/product1",
+                "https://example.com/product2",
+            ]
+
+            with (
+                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+                patch("app.services.pipeline.CSSExtractor") as mock_css_class,
+            ):
+                # Schema.org returns products without titles (quality = 0.0)
+                mock_schema = AsyncMock()
+                mock_schema.extract = AsyncMock(return_value=[{"price": "$10"}])
+                mock_schema_class.return_value = mock_schema
+
+                # OG returns good products (quality > 0.3)
+                og_product = {
+                    "og:title": "Good Product",
+                    "og:description": "A product",
+                    "og:image": "https://example.com/img.jpg",
+                }
+                mock_og = AsyncMock()
+                mock_og.extract = AsyncMock(return_value=[og_product])
+                mock_og.extract_batch = AsyncMock(
+                    return_value=[og_product, og_product]
+                )
+                mock_og_class.return_value = mock_og
+
+                mock_css = AsyncMock()
+                mock_css_class.return_value = mock_css
+
+                result = await pipeline.run("job-quality-gate", "https://example.com")
+
+                # Should have used OG tier (Schema.org was skipped due to low quality)
+                assert result["extraction_tier"] == "sitemap_css"
+                assert result["total_extracted"] == 2
+
+                # Schema.org extractor should have been called only once (probe)
+                assert mock_schema.extract.call_count == 1
+                # OG: 1 probe via extract(), 1 batch via extract_batch()
+                assert mock_og.extract.call_count == 1
+                assert mock_og.extract_batch.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_needs_review_on_zero_products_after_extraction(
+    pipeline, mock_progress_tracker
+):
+    """Test pipeline marks needs_review when URLs exist but extraction finds 0 products."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.GENERIC,
+            confidence=1.0,
+            signals=["fallback:no-signals-detected"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = ["https://example.com/product1"]
+
+            # All extractors return empty
+            with (
+                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+                patch("app.services.pipeline.CSSExtractor") as mock_css_class,
+            ):
+                for mock_class in [mock_schema_class, mock_og_class, mock_css_class]:
+                    mock_ext = AsyncMock()
+                    mock_ext.extract = AsyncMock(return_value=[])
+                    mock_ext.extract_batch = AsyncMock(return_value=[])
+                    mock_class.return_value = mock_ext
+
+                result = await pipeline.run("job-zero-products", "https://example.com")
+
+                assert result["needs_review"] is True
+                assert result["review_reason"] == "zero_products"
+                assert result["total_extracted"] == 0
+
+                last_call = mock_progress_tracker.update.call_args_list[-1]
+                assert last_call[1]["status"] == JobStatus.NEEDS_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_extract_batch_for_full_extraction(
+    pipeline, mock_progress_tracker
+):
+    """Test that _extract_from_urls calls extract_batch() instead of per-URL extract()."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.GENERIC,
+            confidence=1.0,
+            signals=["fallback:no-signals-detected"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = [
+                "https://example.com/product1",
+                "https://example.com/product2",
+                "https://example.com/product3",
+            ]
+
+            product_data = {
+                "name": "Batch Product",
+                "description": "Product",
+                "offers": {"price": "10.00", "priceCurrency": "USD"},
+                "image": "https://example.com/img.jpg",
+                "sku": "BATCH-1",
+            }
+
+            with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
+                mock_extractor = AsyncMock()
+                # Probe returns data
+                mock_extractor.extract = AsyncMock(return_value=[product_data])
+                # Batch returns data for all URLs
+                mock_extractor.extract_batch = AsyncMock(
+                    return_value=[product_data, product_data, product_data]
+                )
+                mock_schema_class.return_value = mock_extractor
+
+                result = await pipeline.run("job-batch", "https://example.com")
+
+                assert result["total_extracted"] == 3
+                # extract() called once for probe, extract_batch() called once for full
+                assert mock_extractor.extract.call_count == 1
+                assert mock_extractor.extract_batch.call_count == 1
+                # extract_batch was called with all 3 URLs
+                batch_call_args = mock_extractor.extract_batch.call_args[0][0]
+                assert len(batch_call_args) == 3

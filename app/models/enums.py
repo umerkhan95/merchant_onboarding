@@ -25,6 +25,7 @@ class JobStatus(StrEnum):
     NORMALIZING = "normalizing"
     INGESTING = "ingesting"
     COMPLETED = "completed"
+    NEEDS_REVIEW = "needs_review"
     FAILED = "failed"
 
 

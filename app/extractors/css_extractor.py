@@ -6,6 +6,7 @@ import json
 import logging
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 from app.extractors.base import BaseExtractor
@@ -39,6 +40,7 @@ class CSSExtractor(BaseExtractor):
             browser_config = BrowserConfig(
                 headless=True,
                 verbose=False,
+                text_mode=True,
             )
 
             # Configure extraction strategy
@@ -48,6 +50,9 @@ class CSSExtractor(BaseExtractor):
             crawler_config = CrawlerRunConfig(
                 extraction_strategy=extraction_strategy,
                 cache_mode="bypass",
+                wait_until="domcontentloaded",
+                page_timeout=30000,
+                delay_before_return_html=2.0,
             )
 
             # Execute crawl
@@ -84,3 +89,50 @@ class CSSExtractor(BaseExtractor):
         except Exception as e:
             logger.exception("CSS extraction failed for %s: %s", url, e)
             return []
+
+    async def extract_batch(self, urls: list[str]) -> list[dict]:
+        """Extract products from multiple URLs using a single browser instance.
+
+        Uses arun_many() with MemoryAdaptiveDispatcher to crawl all URLs
+        concurrently within one browser — eliminates per-URL browser startup.
+        """
+        if not urls:
+            return []
+
+        browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
+        extraction_strategy = JsonCssExtractionStrategy(self.schema, verbose=False)
+        crawler_config = CrawlerRunConfig(
+            extraction_strategy=extraction_strategy,
+            cache_mode="bypass",
+            wait_until="domcontentloaded",
+            page_timeout=30000,
+            delay_before_return_html=2.0,
+        )
+        dispatcher = MemoryAdaptiveDispatcher(
+            max_session_permit=5,
+            memory_threshold_percent=70.0,
+        )
+
+        all_products = []
+        try:
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                results = await crawler.arun_many(
+                    urls=urls,
+                    config=crawler_config,
+                    dispatcher=dispatcher,
+                )
+                for result in results:
+                    if not result.success or not result.extracted_content:
+                        continue
+                    try:
+                        extracted = json.loads(result.extracted_content)
+                        if isinstance(extracted, list):
+                            all_products.extend(extracted)
+                        elif isinstance(extracted, dict) and extracted:
+                            all_products.append(extracted)
+                    except json.JSONDecodeError:
+                        logger.error("Failed to parse JSON from %s", result.url)
+        except Exception as e:
+            logger.exception("Batch CSS extraction failed: %s", e)
+
+        return all_products

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from app.extractors.base import ExtractionResult
 from app.extractors.css_extractor import CSSExtractor
 from app.extractors.magento_api import MagentoAPIExtractor
 from app.extractors.opengraph_extractor import OpenGraphExtractor
@@ -17,7 +18,9 @@ from app.extractors.schemas.bigcommerce import BIGCOMMERCE_SCHEMA
 from app.extractors.schemas.generic import GENERIC_SCHEMA
 from app.extractors.shopify_api import ShopifyAPIExtractor
 from app.extractors.woocommerce_api import WooCommerceAPIExtractor
+from app.infra.quality_scorer import QualityScorer
 from app.models.enums import ExtractionTier, JobStatus, Platform
+from app.services.extraction_validator import ExtractionValidator
 from app.services.platform_detector import PlatformDetector
 from app.services.product_normalizer import ProductNormalizer
 from app.services.url_discovery import URLDiscoveryService
@@ -58,6 +61,8 @@ class Pipeline:
         self.detector = PlatformDetector()
         self.discovery = URLDiscoveryService()
         self.normalizer = ProductNormalizer()
+        self.quality_scorer = QualityScorer()
+        self.validator = ExtractionValidator()
         self.progress = progress_tracker
         self.circuit_breaker = circuit_breaker
         self.rate_limiter = rate_limiter
@@ -120,8 +125,8 @@ class Pipeline:
                     job_id=job_id,
                     processed=0,
                     total=0,
-                    status=JobStatus.COMPLETED,
-                    current_step="Completed with no products found",
+                    status=JobStatus.NEEDS_REVIEW,
+                    current_step="No product URLs discovered — needs manual review",
                 )
                 return {
                     "platform": platform.value,
@@ -129,6 +134,8 @@ class Pipeline:
                     "total_normalized": 0,
                     "total_ingested": 0,
                     "extraction_tier": ExtractionTier.API.value,
+                    "needs_review": True,
+                    "review_reason": "no_urls_discovered",
                 }
 
             # Step 3: Extract products
@@ -140,10 +147,39 @@ class Pipeline:
                 current_step=f"Extracting products from {len(urls)} URLs",
             )
 
-            raw_products, extraction_tier = await self._extract_products(
+            extraction_result = await self._extract_products(
                 shop_url, platform, urls, job_id
             )
-            logger.info(f"Extracted {len(raw_products)} raw products (tier: {extraction_tier})")
+            logger.info(
+                f"Extracted {extraction_result.product_count} raw products "
+                f"(tier: {extraction_result.tier}, quality: {extraction_result.quality_score:.2f})"
+            )
+
+            # Step 3b: Validate extraction results
+            validation = self.validator.validate(extraction_result)
+            if not validation:
+                logger.warning(
+                    f"Extraction validation failed for {shop_url}: {validation.reason} — {validation.message}"
+                )
+                await self.progress.update(
+                    job_id=job_id,
+                    processed=0,
+                    total=len(urls),
+                    status=JobStatus.NEEDS_REVIEW,
+                    current_step=f"Extraction needs review: {validation.message}",
+                )
+                return {
+                    "platform": platform.value,
+                    "total_extracted": extraction_result.product_count,
+                    "total_normalized": 0,
+                    "total_ingested": 0,
+                    "extraction_tier": extraction_result.tier.value,
+                    "needs_review": True,
+                    "review_reason": validation.reason,
+                }
+
+            raw_products = extraction_result.products
+            extraction_tier = extraction_result.tier
 
             # Step 4: Normalize products
             await self.progress.update(
@@ -227,7 +263,7 @@ class Pipeline:
 
     async def _extract_products(
         self, shop_url: str, platform: Platform, urls: list[str], job_id: str
-    ) -> tuple[list[dict], ExtractionTier]:
+    ) -> ExtractionResult:
         """Extract products based on platform and URLs.
 
         Args:
@@ -237,7 +273,7 @@ class Pipeline:
             job_id: Job identifier for progress tracking
 
         Returns:
-            Tuple of (raw_products, extraction_tier)
+            ExtractionResult with products, tier, and quality score
         """
         # Select extractor based on platform
         if platform == Platform.SHOPIFY:
@@ -283,7 +319,13 @@ class Pipeline:
                 urls, shop_url, job_id
             )
 
-        return raw_products, extraction_tier
+        quality_score = self.quality_scorer.score_batch(raw_products)
+        return ExtractionResult(
+            products=raw_products,
+            tier=extraction_tier,
+            quality_score=quality_score,
+            urls_attempted=len(urls),
+        )
 
     async def _extract_with_fallback_chain(
         self,
@@ -318,16 +360,14 @@ class Pipeline:
         # Tier 2: Schema.org on first URL
         schema_extractor = SchemaOrgExtractor()
         schema_products = await self._extract_with_circuit_breaker(schema_extractor, probe_url, shop_url)
-        if schema_products:
-            logger.info("Schema.org extraction successful, extracting from all URLs")
+        if self._probe_acceptable(schema_products, "Schema.org"):
             products = await self._extract_from_urls(schema_extractor, urls, shop_url, job_id)
             return products, ExtractionTier.SITEMAP_CSS
 
         # Tier 3: OpenGraph on first URL
         og_extractor = OpenGraphExtractor()
         og_products = await self._extract_with_circuit_breaker(og_extractor, probe_url, shop_url)
-        if og_products:
-            logger.info("OpenGraph extraction successful, extracting from all URLs")
+        if self._probe_acceptable(og_products, "OpenGraph"):
             products = await self._extract_from_urls(og_extractor, urls, shop_url, job_id)
             return products, ExtractionTier.SITEMAP_CSS
 
@@ -335,8 +375,7 @@ class Pipeline:
         if self.smart_css:
             logger.info("Trying SmartCSS extraction (auto-generated selectors)")
             smart_products = await self._extract_with_circuit_breaker(self.smart_css, probe_url, shop_url)
-            if smart_products:
-                logger.info("SmartCSS extraction successful, extracting from all URLs")
+            if self._probe_acceptable(smart_products, "SmartCSS"):
                 products = await self._extract_from_urls(self.smart_css, urls, shop_url, job_id)
                 return products, ExtractionTier.SMART_CSS
 
@@ -344,8 +383,7 @@ class Pipeline:
         if self.llm_extractor:
             logger.info("Trying LLM extraction (universal fallback)")
             llm_products = await self._extract_with_circuit_breaker(self.llm_extractor, probe_url, shop_url)
-            if llm_products:
-                logger.info("LLM extraction successful, extracting from all URLs")
+            if self._probe_acceptable(llm_products, "LLM"):
                 products = await self._extract_from_urls(self.llm_extractor, urls, shop_url, job_id)
                 return products, ExtractionTier.LLM
 
@@ -355,6 +393,33 @@ class Pipeline:
         css_extractor = CSSExtractor(schema)
         products = await self._extract_from_urls(css_extractor, urls, shop_url, job_id)
         return products, ExtractionTier.DEEP_CRAWL
+
+    def _probe_acceptable(self, products: list[dict], tier_name: str) -> bool:
+        """Check if probe results are acceptable quality to commit to this tier.
+
+        Args:
+            products: Raw product dicts from probe extraction
+            tier_name: Name of the tier for logging
+
+        Returns:
+            True if products are non-empty and meet quality threshold
+        """
+        if not products:
+            return False
+
+        quality = self.quality_scorer.score_batch(products)
+        if quality < 0.3:
+            logger.info(
+                "%s probe returned %d products but quality %.2f is below threshold, skipping",
+                tier_name, len(products), quality,
+            )
+            return False
+
+        logger.info(
+            "%s probe successful: %d products, quality %.2f — committing to full extraction",
+            tier_name, len(products), quality,
+        )
+        return True
 
     async def _extract_with_circuit_breaker(
         self, extractor, url: str, domain: str
@@ -382,32 +447,27 @@ class Pipeline:
     async def _extract_from_urls(
         self, extractor, urls: list[str], domain: str, job_id: str
     ) -> list[dict]:
-        """Extract products from multiple URLs with rate limiting and progress tracking.
+        """Extract products from multiple URLs using batch extraction.
+
+        Uses extract_batch() which, for browser-based extractors, opens a single
+        browser and crawls all URLs concurrently via arun_many().
 
         Args:
             extractor: Extractor instance
             urls: List of URLs to extract from
-            domain: Domain for rate limiting
+            domain: Domain for rate limiting (unused — arun_many handles concurrency)
             job_id: Job identifier for progress tracking
 
         Returns:
             List of raw product dicts from all URLs
         """
-        all_products = []
+        products = await extractor.extract_batch(urls)
 
-        for i, url in enumerate(urls):
-            async with self.rate_limiter.acquire(domain):
-                products = await self._extract_with_circuit_breaker(extractor, url, domain)
-                all_products.extend(products)
-
-                # Update progress every 5 URLs
-                if (i + 1) % 5 == 0:
-                    await self.progress.update(
-                        job_id=job_id,
-                        processed=i + 1,
-                        total=len(urls),
-                        status=JobStatus.EXTRACTING,
-                        current_step=f"Extracted {i + 1}/{len(urls)} URLs",
-                    )
-
-        return all_products
+        await self.progress.update(
+            job_id=job_id,
+            processed=len(urls),
+            total=len(urls),
+            status=JobStatus.EXTRACTING,
+            current_step=f"Extracted {len(urls)} URLs, got {len(products)} products",
+        )
+        return products

@@ -50,6 +50,9 @@ class HTMLSanitizer:
         Returns:
             Sanitized HTML string containing only allowed tags and attributes.
         """
+        if not html:
+            return ""
+
         # First pass: remove script and style elements entirely
         # (bleach's strip=True would keep their text content).
         for pattern in HTMLSanitizer._STRIP_PATTERNS:

@@ -1,0 +1,48 @@
+{
+  "name": "Allbirds",
+  "url": "https://www.allbirds.com",
+  "platform": "shopify",
+  "min_products": 30,
+  "products": [
+    {
+      "title": "Men's Tree Runners",
+      "price": "98.00",
+      "currency": "USD",
+      "vendor": "Allbirds",
+      "in_stock": true,
+      "product_url": "https://www.allbirds.com/products/mens-tree-runners"
+    },
+    {
+      "title": "Women's Tree Runners",
+      "price": "98.00",
+      "currency": "USD",
+      "vendor": "Allbirds",
+      "in_stock": true,
+      "product_url": "https://www.allbirds.com/products/womens-tree-runners"
+    },
+    {
+      "title": "Men's Wool Runners",
+      "price": "110.00",
+      "currency": "USD",
+      "vendor": "Allbirds",
+      "in_stock": true,
+      "product_url": "https://www.allbirds.com/products/mens-wool-runners"
+    },
+    {
+      "title": "Women's Wool Runners",
+      "price": "110.00",
+      "currency": "USD",
+      "vendor": "Allbirds",
+      "in_stock": true,
+      "product_url": "https://www.allbirds.com/products/womens-wool-runners"
+    },
+    {
+      "title": "Men's Tree Dashers",
+      "price": "135.00",
+      "currency": "USD",
+      "vendor": "Allbirds",
+      "in_stock": true,
+      "product_url": "https://www.allbirds.com/products/mens-tree-dashers"
+    }
+  ]
+}

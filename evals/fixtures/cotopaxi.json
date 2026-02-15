@@ -1,0 +1,32 @@
+{
+  "name": "Cotopaxi",
+  "url": "https://www.cotopaxi.com",
+  "platform": "shopify",
+  "min_products": 20,
+  "products": [
+    {
+      "title": "Fuego Down Jacket - Men's",
+      "price": "200.00",
+      "currency": "USD",
+      "vendor": "Cotopaxi",
+      "in_stock": true,
+      "product_url": "https://www.cotopaxi.com/products/fuego-down-jacket-mens"
+    },
+    {
+      "title": "Fuego Down Jacket - Women's",
+      "price": "200.00",
+      "currency": "USD",
+      "vendor": "Cotopaxi",
+      "in_stock": true,
+      "product_url": "https://www.cotopaxi.com/products/fuego-down-jacket-womens"
+    },
+    {
+      "title": "Allpa 35L Travel Pack",
+      "price": "200.00",
+      "currency": "USD",
+      "vendor": "Cotopaxi",
+      "in_stock": true,
+      "product_url": "https://www.cotopaxi.com/products/allpa-35l-travel-pack"
+    }
+  ]
+}

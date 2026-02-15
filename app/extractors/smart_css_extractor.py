@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, LLMConfig
+from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 from app.extractors.base import BaseExtractor
@@ -105,11 +106,14 @@ class SmartCSSExtractor(BaseExtractor):
             return []
 
         try:
-            browser_config = BrowserConfig(headless=True, verbose=False)
+            browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
             extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
             crawler_config = CrawlerRunConfig(
                 extraction_strategy=extraction_strategy,
                 cache_mode="bypass",
+                wait_until="domcontentloaded",
+                page_timeout=30000,
+                delay_before_return_html=2.0,
             )
 
             async with AsyncWebCrawler(config=browser_config) as crawler:
@@ -150,3 +154,64 @@ class SmartCSSExtractor(BaseExtractor):
         except Exception as e:
             logger.exception("SmartCSS extraction failed for %s: %s", url, e)
             return []
+
+    async def extract_batch(self, urls: list[str]) -> list[dict]:
+        """Extract products from multiple URLs using a single browser instance.
+
+        Generates/fetches CSS schema from the first URL, then uses arun_many()
+        to crawl all URLs concurrently with that schema.
+        """
+        if not urls:
+            return []
+
+        # Get or generate schema from first URL
+        schema = await self._get_or_generate_schema(urls[0])
+        if not schema:
+            return []
+
+        browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
+        extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
+        crawler_config = CrawlerRunConfig(
+            extraction_strategy=extraction_strategy,
+            cache_mode="bypass",
+            wait_until="domcontentloaded",
+            page_timeout=30000,
+            delay_before_return_html=2.0,
+        )
+        dispatcher = MemoryAdaptiveDispatcher(
+            max_session_permit=5,
+            memory_threshold_percent=70.0,
+        )
+
+        all_products = []
+        try:
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                results = await crawler.arun_many(
+                    urls=urls,
+                    config=crawler_config,
+                    dispatcher=dispatcher,
+                )
+                for result in results:
+                    if not result.success or not result.extracted_content:
+                        continue
+                    try:
+                        extracted = json.loads(result.extracted_content)
+                        if isinstance(extracted, list):
+                            all_products.extend(
+                                p for p in extracted if isinstance(p, dict)
+                            )
+                        elif isinstance(extracted, dict) and extracted:
+                            all_products.append(extracted)
+                    except json.JSONDecodeError:
+                        logger.error("Failed to parse SmartCSS JSON from %s", result.url)
+        except Exception as e:
+            logger.exception("Batch SmartCSS extraction failed: %s", e)
+
+        if not all_products:
+            # Invalidate cache if batch produced nothing
+            cached = await self.cache.get(urls[0])
+            if cached:
+                logger.info("SmartCSS batch produced 0 results, invalidating cached schema")
+                await self.cache.invalidate(urls[0])
+
+        return all_products

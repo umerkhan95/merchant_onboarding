@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+from crawl4ai.deep_crawling import BFSDeepCrawlStrategy, FilterChain, DomainFilter, URLPatternFilter
 
 from app.models.enums import Platform
 from app.services.sitemap_parser import SitemapParser
@@ -21,7 +22,14 @@ NON_PRODUCT_PATHS = {
     "/", "/about", "/about-us", "/contact", "/contact-us", "/blog", "/cart",
     "/checkout", "/account", "/login", "/register", "/search", "/faq",
     "/privacy-policy", "/terms", "/terms-of-service", "/shipping", "/returns",
-    "/sitemap", "/brands", "/categories", "/pages",
+    "/sitemap", "/brands", "/categories", "/pages", "/wishlist", "/compare",
+    "/basket", "/help", "/support", "/careers", "/press",
+}
+
+# Path segments that indicate non-product pages
+NON_PRODUCT_SEGMENTS = {
+    "checkout", "basket", "cart", "login", "register", "account",
+    "blog", "faq", "help", "support", "careers", "press",
 }
 
 
@@ -181,60 +189,68 @@ class URLDiscoveryService:
     # ── crawl4ai browser-based discovery ──────────────────────────────
 
     async def _discover_via_crawl4ai(self, base_url: str) -> list[str]:
-        """Use crawl4ai to render the storefront and extract internal product links.
+        """Use crawl4ai BFSDeepCrawlStrategy to discover product URLs.
 
-        crawl4ai handles JavaScript-rendered pages, anti-bot measures, and
-        returns internal/external links from the rendered DOM.
+        Performs a breadth-first crawl up to depth 2, filtering out non-product
+        pages via domain and URL pattern filters.
         """
         parsed = urlparse(base_url)
-        base_domain = parsed.netloc
+        domain = parsed.netloc
 
-        browser_config = BrowserConfig(headless=True, verbose=False)
-        crawl_config = CrawlerRunConfig(cache_mode="bypass")
+        filter_chain = FilterChain([
+            DomainFilter(allowed_domains=[domain]),
+            URLPatternFilter(
+                patterns=[
+                    "*/cart*", "*/checkout*", "*/account*", "*/login*",
+                    "*/register*", "*/search*", "*/blog/*", "*/faq*",
+                    "*/privacy*", "*/terms*", "*/sitemap*", "*/basket*",
+                    "*/help*", "*/support*", "*/careers*", "*/press*",
+                    "*/wishlist*", "*/compare*",
+                ],
+                reverse=True,  # Exclude these patterns
+            ),
+        ])
+
+        strategy = BFSDeepCrawlStrategy(
+            max_depth=2,
+            max_pages=50,
+            filter_chain=filter_chain,
+            include_external=False,
+        )
+
+        browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
+        crawl_config = CrawlerRunConfig(
+            deep_crawl_strategy=strategy,
+            cache_mode="bypass",
+            wait_until="domcontentloaded",
+            page_timeout=30000,
+            delay_before_return_html=2.0,
+        )
 
         found_urls: set[str] = set()
-
         try:
             async with AsyncWebCrawler(config=browser_config) as crawler:
-                # Crawl the storefront homepage
-                result = await crawler.arun(url=base_url, config=crawl_config)
-
-                if not result.success:
-                    logger.warning(f"crawl4ai failed for {base_url}: {result.error_message}")
-                    return []
-
-                # Extract internal links from crawl4ai result
-                internal_links = result.links.get("internal", [])
-                logger.info(f"crawl4ai found {len(internal_links)} internal links on {base_url}")
-
-                for link_data in internal_links:
-                    href = link_data.get("href", "") if isinstance(link_data, dict) else getattr(link_data, "href", "")
-                    if not href:
-                        continue
-
-                    # Filter out non-product pages
-                    link_parsed = urlparse(href)
-                    path = link_parsed.path.rstrip("/")
-
-                    # Skip empty, anchor-only, and non-product paths
-                    if not path or path in NON_PRODUCT_PATHS:
-                        continue
-
-                    # Skip category-like paths (e.g., /blog/*, /categories/*)
-                    if any(path.startswith(skip) for skip in ("/blog/", "/category/", "/categories/", "/brands/")):
-                        continue
-
-                    # Must be same domain
-                    if link_parsed.netloc and link_parsed.netloc != base_domain:
-                        continue
-
-                    found_urls.add(href)
-
+                results = await crawler.arun(url=base_url, config=crawl_config)
+                # Deep crawl returns a list of CrawlResult
+                if isinstance(results, list):
+                    for result in results:
+                        if result.success:
+                            url = result.url
+                            # Additional filtering: skip non-product paths
+                            url_parsed = urlparse(url)
+                            path = url_parsed.path.rstrip("/")
+                            if path in NON_PRODUCT_PATHS:
+                                continue
+                            path_parts = set(path.strip("/").split("/"))
+                            if path_parts & NON_PRODUCT_SEGMENTS:
+                                continue
+                            found_urls.add(url)
+                elif hasattr(results, "success") and results.success:
+                    found_urls.add(results.url)
         except Exception as e:
-            logger.error(f"crawl4ai discovery failed for {base_url}: {e}")
-            return []
+            logger.error("Deep crawl discovery failed for %s: %s", base_url, e)
 
         if found_urls:
-            logger.info(f"crawl4ai discovered {len(found_urls)} candidate product URLs")
+            logger.info("Deep crawl discovered %d candidate product URLs", len(found_urls))
 
         return list(found_urls)

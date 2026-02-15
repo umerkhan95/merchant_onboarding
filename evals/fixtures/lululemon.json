@@ -1,0 +1,29 @@
+{
+  "name": "Lululemon",
+  "url": "https://shop.lululemon.com",
+  "platform": "generic",
+  "min_products": 50,
+  "products": [
+    {
+      "title": "Align High-Rise Pant 25\"",
+      "price": "98.00",
+      "currency": "USD",
+      "vendor": "lululemon",
+      "in_stock": true
+    },
+    {
+      "title": "Scuba Oversized Half-Zip Hoodie",
+      "price": "118.00",
+      "currency": "USD",
+      "vendor": "lululemon",
+      "in_stock": true
+    },
+    {
+      "title": "ABC Slim-Fit Pant 32\" Warpstreme",
+      "price": "128.00",
+      "currency": "USD",
+      "vendor": "lululemon",
+      "in_stock": true
+    }
+  ]
+}

@@ -432,6 +432,80 @@ class TestURLDiscoveryService:
         # Both should return the same results
         assert urls1 == urls2
 
+    async def test_deep_crawl_discovers_product_urls(self, monkeypatch):
+        """Test that BFS deep crawl discovers product URLs and filters non-product pages."""
+        service = URLDiscoveryService()
+
+        # Fake crawl results (deep crawl returns a list of CrawlResult)
+        class FakeCrawlResult:
+            def __init__(self, url, success=True):
+                self.url = url
+                self.success = success
+
+        fake_results = [
+            FakeCrawlResult("https://shop.example.com/products/bag-123"),
+            FakeCrawlResult("https://shop.example.com/products/shoe-456"),
+            FakeCrawlResult("https://shop.example.com/about"),  # filtered by NON_PRODUCT_PATHS
+            FakeCrawlResult("https://shop.example.com/checkout/step1"),  # filtered by NON_PRODUCT_SEGMENTS
+            FakeCrawlResult("https://shop.example.com/cart"),  # filtered by NON_PRODUCT_PATHS
+            FakeCrawlResult("https://shop.example.com/women/dresses"),  # kept
+            FakeCrawlResult("https://shop.example.com/blog/post1", success=False),  # failed
+        ]
+
+        class FakeCrawler:
+            async def arun(self, url, config=None):
+                return fake_results
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.url_discovery.AsyncWebCrawler",
+            lambda config=None, **kwargs: FakeCrawler(),
+        )
+
+        urls = await service._discover_via_crawl4ai("https://shop.example.com")
+
+        # Product URLs should be included
+        assert "https://shop.example.com/products/bag-123" in urls
+        assert "https://shop.example.com/products/shoe-456" in urls
+        assert "https://shop.example.com/women/dresses" in urls
+
+        # Non-product URLs should be filtered out
+        assert "https://shop.example.com/about" not in urls
+        assert "https://shop.example.com/checkout/step1" not in urls
+        assert "https://shop.example.com/cart" not in urls
+        assert "https://shop.example.com/blog/post1" not in urls
+
+    async def test_deep_crawl_handles_single_result(self, monkeypatch):
+        """Test deep crawl handles case where arun returns a single result."""
+        service = URLDiscoveryService()
+
+        class FakeCrawlResult:
+            success = True
+            url = "https://shop.example.com/products/item1"
+
+        class FakeCrawler:
+            async def arun(self, url, config=None):
+                return FakeCrawlResult()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.url_discovery.AsyncWebCrawler",
+            lambda config=None, **kwargs: FakeCrawler(),
+        )
+
+        urls = await service._discover_via_crawl4ai("https://shop.example.com")
+        assert "https://shop.example.com/products/item1" in urls
+
     @respx.mock
     async def test_sitemap_deduplication(self):
         """Test that duplicate URLs from multiple sitemaps are deduplicated."""
