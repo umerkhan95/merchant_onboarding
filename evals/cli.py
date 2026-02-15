@@ -34,6 +34,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--all-tiers",
+        action="store_true",
+        help="Run all 5 extraction tiers (including smart_css and llm). Requires LLM_API_KEY.",
+    )
+
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -46,6 +52,65 @@ def parse_args() -> argparse.Namespace:
         help="Output raw JSON instead of formatted table",
     )
 
+    parser.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="Save current scores as baseline",
+    )
+
+    parser.add_argument(
+        "--check-regression",
+        action="store_true",
+        help="Check for regressions vs saved baseline",
+    )
+
+    parser.add_argument(
+        "--regression-threshold",
+        type=float,
+        default=0.05,
+        help="Max allowed score drop (default: 0.05)",
+    )
+
+    parser.add_argument(
+        "--allow-regression",
+        action="append",
+        dest="allowed_regressions",
+        help="Allow regression for specific field (site.tier.field)",
+    )
+
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable memory profiling (slower)",
+    )
+
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Force offline mode (fail if snapshot missing)",
+    )
+
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Force live mode (ignore snapshots)",
+    )
+
+    # Create subparsers for snapshot command
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    snapshot_parser = subparsers.add_parser("snapshot", help="Capture HTML snapshots")
+    snapshot_parser.add_argument(
+        "--url",
+        required=True,
+        help="URL to capture",
+    )
+    snapshot_parser.add_argument(
+        "--output",
+        type=str,
+        help="Output file path (relative to snapshots dir or absolute)",
+    )
+
     return parser.parse_args()
 
 
@@ -54,7 +119,7 @@ async def main() -> int:
     args = parse_args()
 
     # Set up logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+    log_level = logging.DEBUG if hasattr(args, "verbose") and args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -64,6 +129,23 @@ async def main() -> int:
     logger = logging.getLogger(__name__)
 
     try:
+        # Handle snapshot command
+        if args.command == "snapshot":
+            from pathlib import Path
+            from evals.snapshot import capture_snapshot
+
+            output_path = None
+            if args.output:
+                output_path = Path(args.output)
+                if not output_path.is_absolute():
+                    # Relative to snapshots dir
+                    from evals.snapshot import SNAPSHOTS_DIR
+                    output_path = SNAPSHOTS_DIR / output_path
+
+            saved_path = await capture_snapshot(args.url, output_path)
+            logger.info("Snapshot saved successfully: %s", saved_path)
+            print(f"Snapshot saved: {saved_path}")
+            return 0
         # Load fixtures
         if args.fixture:
             fixture_path = FIXTURES_DIR / f"{args.fixture}.json"
@@ -83,7 +165,19 @@ async def main() -> int:
         logger.info("Loaded %d fixture(s)", len(fixtures))
 
         # Create runner with tier filter
-        runner = EvalRunner(tiers=args.tiers)
+        if args.all_tiers:
+            tiers = EvalRunner.ALL_TIERS
+        elif args.tiers:
+            tiers = args.tiers
+        else:
+            tiers = None  # Use default
+
+        runner = EvalRunner(
+            tiers=tiers,
+            profile=args.profile,
+            force_offline=args.offline,
+            force_live=args.live,
+        )
 
         # Run evaluations
         logger.info("Starting evaluations...")
@@ -109,6 +203,24 @@ async def main() -> int:
             if len(reports) > 1:
                 print()
                 print(ReportFormatter.format_summary(reports))
+
+        # Save baseline if requested
+        if args.save_baseline:
+            from evals.baseline import save_baseline
+            baseline_path = save_baseline(reports)
+            print(f"\nBaseline saved to {baseline_path}")
+
+        # Check regression if requested
+        if args.check_regression:
+            from evals.baseline import check_regression
+            passed, message = check_regression(
+                reports,
+                threshold=args.regression_threshold,
+                allowed_regressions=args.allowed_regressions,
+            )
+            print(f"\n{message}")
+            if not passed:
+                return 1  # Exit code 1 for CI
 
         logger.info("Evaluations complete")
         return 0

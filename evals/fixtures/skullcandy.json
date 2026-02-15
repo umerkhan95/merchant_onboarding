@@ -1,0 +1,29 @@
+{
+  "name": "Skullcandy",
+  "url": "https://www.skullcandy.com",
+  "platform": "generic",
+  "min_products": 30,
+  "products": [
+    {
+      "title": "Crusher ANC 2",
+      "price": "199.99",
+      "currency": "USD",
+      "vendor": "Skullcandy",
+      "in_stock": true
+    },
+    {
+      "title": "Indy ANC",
+      "price": "89.99",
+      "currency": "USD",
+      "vendor": "Skullcandy",
+      "in_stock": true
+    },
+    {
+      "title": "Hesh ANC",
+      "price": "99.99",
+      "currency": "USD",
+      "vendor": "Skullcandy",
+      "in_stock": true
+    }
+  ]
+}

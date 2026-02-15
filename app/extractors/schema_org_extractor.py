@@ -16,21 +16,18 @@ logger = logging.getLogger(__name__)
 class SchemaOrgExtractor(BaseExtractor):
     """Extract JSON-LD structured data from <script type='application/ld+json'> tags."""
 
-    async def extract(self, url: str) -> list[dict]:
-        """Extract JSON-LD structured data from page.
+    @staticmethod
+    def extract_from_html(html: str, url: str) -> list[dict]:
+        """Extract JSON-LD from raw HTML content.
 
         Args:
-            url: Product page URL
+            html: Raw HTML content
+            url: URL for logging purposes
 
         Returns:
             List of raw Product JSON-LD dicts. Empty list on error or if no Product found.
         """
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                html = response.text
-
             soup = BeautifulSoup(html, "html.parser")
             script_tags = soup.find_all("script", type="application/ld+json")
 
@@ -71,6 +68,27 @@ class SchemaOrgExtractor(BaseExtractor):
                 logger.debug("No Product objects found in JSON-LD on %s", url)
 
             return products
+
+        except Exception as e:
+            logger.exception("Schema.org extraction failed for %s: %s", url, e)
+            return []
+
+    async def extract(self, url: str) -> list[dict]:
+        """Extract JSON-LD structured data from page.
+
+        Args:
+            url: Product page URL
+
+        Returns:
+            List of raw Product JSON-LD dicts. Empty list on error or if no Product found.
+        """
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                html = response.text
+
+            return self.extract_from_html(html, url)
 
         except httpx.HTTPStatusError as e:
             logger.error("HTTP error fetching %s: %s", url, e)

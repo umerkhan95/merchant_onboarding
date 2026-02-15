@@ -20,6 +20,7 @@ def load_fixture(path: Path) -> TestCase:
         platform=data["platform"],
         products=products,
         min_products=data.get("min_products"),
+        html_file=data.get("html_file"),
     )
 
 

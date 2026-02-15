@@ -31,8 +31,8 @@ class ReportFormatter:
         # Footer with best tier
         best = report.best_tier
         if best:
-            avg_score = best.avg_score * 100
-            lines.append(f"Best tier: {best.tier_name} (avg score: {avg_score:.1f}%)")
+            overall = best.overall_score * 100
+            lines.append(f"Best tier: {best.tier_name} (overall score: {overall:.1f}%)")
         else:
             lines.append("No successful tier results.")
 
@@ -83,11 +83,30 @@ class ReportFormatter:
 
             lines.append("└" + "─" * 15 + "┴" + "─" * 7 + "┴" + "─" * 30 + "┴" + "─" * 30 + "┘")
 
+        # Completeness
+        if tier.min_products:
+            comp_pct = tier.completeness_score * 100
+            lines.append("")
+            lines.append(f"Completeness: {tier.products_extracted}/{tier.min_products} ({comp_pct:.1f}%)")
+
+        # Performance metrics (if profiled)
+        perf_parts = []
+        if tier.peak_memory_mb is not None:
+            perf_parts.append(f"Memory: {tier.peak_memory_mb:.1f}MB")
+        if tier.tokens_used is not None:
+            perf_parts.append(f"Tokens: {tier.tokens_used:,}")
+        if tier.estimated_cost_usd is not None:
+            perf_parts.append(f"Cost: ${tier.estimated_cost_usd:.4f}")
+        if perf_parts:
+            lines.append("")
+            lines.append(" | ".join(perf_parts))
+
         # Summary line
         avg_score = tier.avg_score * 100
+        overall = tier.overall_score * 100
         summary = (
             f"Products: {tier.products_extracted} extracted, {tier.products_matched} matched | "
-            f"Avg: {avg_score:.1f}% | Time: {tier.duration_seconds:.1f}s"
+            f"Accuracy: {avg_score:.1f}% | Overall: {overall:.1f}% | Time: {tier.duration_seconds:.1f}s"
         )
         lines.append("")
         lines.append(summary)
@@ -121,10 +140,10 @@ class ReportFormatter:
             best = report.best_tier
             if best:
                 tier_name = ReportFormatter._truncate(best.tier_name, 15)
-                score_pct = f"{best.avg_score * 100:5.1f}%"
+                score_pct = f"{best.overall_score * 100:5.1f}%"
                 products = f"{best.products_matched}/{best.products_extracted}"
 
-                total_score += best.avg_score
+                total_score += best.overall_score
                 total_count += 1
             else:
                 tier_name = "N/A"
@@ -166,6 +185,9 @@ class ReportFormatter:
                     "field_averages": tier.field_averages,
                     "duration_seconds": tier.duration_seconds,
                     "error": tier.error,
+                    "peak_memory_mb": tier.peak_memory_mb,
+                    "tokens_used": tier.tokens_used,
+                    "estimated_cost_usd": tier.estimated_cost_usd,
                 }
                 for tier in report.tier_results
             ],

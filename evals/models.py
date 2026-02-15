@@ -82,6 +82,7 @@ class TestCase:
     platform: str
     products: list[ExpectedProduct]
     min_products: int | None = None
+    html_file: str | None = None  # Relative path to HTML snapshot in fixtures/snapshots/
 
 
 @dataclass
@@ -128,6 +129,10 @@ class TierResult:
     product_scores: list[ProductScore]
     duration_seconds: float
     error: str | None = None
+    min_products: int | None = None  # Expected minimum from test case
+    peak_memory_mb: float | None = None  # Peak memory during extraction
+    tokens_used: int | None = None  # LLM tokens used (Tier 4-5 only)
+    estimated_cost_usd: float | None = None  # Estimated cost (LLM tiers)
 
     @property
     def avg_score(self) -> float:
@@ -147,6 +152,21 @@ class TierResult:
             for name, scores in field_totals.items()
         }
 
+    @property
+    def completeness_score(self) -> float:
+        """How many products were found vs expected minimum."""
+        if not self.min_products or self.min_products <= 0:
+            return 1.0  # No expectation set
+        return min(1.0, self.products_extracted / self.min_products)
+
+    @property
+    def overall_score(self) -> float:
+        """Weighted combination of accuracy and completeness.
+
+        60% field accuracy + 40% completeness.
+        """
+        return (self.avg_score * 0.6) + (self.completeness_score * 0.4)
+
 
 @dataclass
 class EvalReport:
@@ -162,4 +182,4 @@ class EvalReport:
         scorable = [t for t in self.tier_results if t.product_scores]
         if not scorable:
             return None
-        return max(scorable, key=lambda t: t.avg_score)
+        return max(scorable, key=lambda t: t.overall_score)

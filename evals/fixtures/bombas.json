@@ -1,0 +1,29 @@
+{
+  "name": "Bombas",
+  "url": "https://bombas.com",
+  "platform": "shopify",
+  "min_products": 50,
+  "products": [
+    {
+      "title": "Men's Solids Calf Sock 4-Pack",
+      "price": "51.20",
+      "currency": "USD",
+      "vendor": "Bombas",
+      "in_stock": true
+    },
+    {
+      "title": "Women's Gripper Ankle Sock 4-Pack",
+      "price": "51.20",
+      "currency": "USD",
+      "vendor": "Bombas",
+      "in_stock": true
+    },
+    {
+      "title": "Men's Merino Wool Blend Calf Sock",
+      "price": "18.00",
+      "currency": "USD",
+      "vendor": "Bombas",
+      "in_stock": true
+    }
+  ]
+}

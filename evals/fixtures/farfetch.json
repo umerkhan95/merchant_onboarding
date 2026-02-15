@@ -1,0 +1,29 @@
+{
+  "name": "Farfetch",
+  "url": "https://www.farfetch.com",
+  "platform": "generic",
+  "min_products": 1000,
+  "products": [
+    {
+      "title": "Gucci GG Marmont small shoulder bag",
+      "price": "2450.00",
+      "currency": "USD",
+      "vendor": "Gucci",
+      "in_stock": true
+    },
+    {
+      "title": "Prada Re-Nylon triangle-logo baseball cap",
+      "price": "595.00",
+      "currency": "USD",
+      "vendor": "Prada",
+      "in_stock": true
+    },
+    {
+      "title": "Balenciaga Track sneakers",
+      "price": "1050.00",
+      "currency": "USD",
+      "vendor": "Balenciaga",
+      "in_stock": true
+    }
+  ]
+}

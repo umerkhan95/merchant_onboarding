@@ -1,0 +1,29 @@
+{
+  "name": "Huel",
+  "url": "https://huel.com",
+  "platform": "generic",
+  "min_products": 20,
+  "products": [
+    {
+      "title": "Huel Black Edition",
+      "price": "49.99",
+      "currency": "USD",
+      "vendor": "Huel",
+      "in_stock": true
+    },
+    {
+      "title": "Huel Daily Greens",
+      "price": "36.00",
+      "currency": "USD",
+      "vendor": "Huel",
+      "in_stock": true
+    },
+    {
+      "title": "Huel Complete Protein",
+      "price": "36.00",
+      "currency": "USD",
+      "vendor": "Huel",
+      "in_stock": true
+    }
+  ]
+}

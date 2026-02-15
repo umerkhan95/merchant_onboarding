@@ -1,0 +1,14 @@
+{
+  "name": "Test Offline Mode",
+  "url": "https://example.com/test-product",
+  "platform": "generic",
+  "html_file": "test_product.html",
+  "products": [
+    {
+      "title": "Test Product",
+      "price": "99.99",
+      "currency": "USD",
+      "image_url": "https://example.com/image.jpg"
+    }
+  ]
+}

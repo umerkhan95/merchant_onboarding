@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Product</title>
+    <meta property="og:title" content="Test Product">
+    <meta property="og:price:amount" content="99.99">
+    <meta property="og:price:currency" content="USD">
+    <meta property="og:image" content="https://example.com/image.jpg">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        "name": "Test Product",
+        "description": "A test product for offline evaluation",
+        "image": "https://example.com/image.jpg",
+        "offers": {
+            "@type": "Offer",
+            "price": "99.99",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+        }
+    }
+    </script>
+</head>
+<body>
+    <h1>Test Product</h1>
+    <p>Price: $99.99</p>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "Nordstrom",
+  "url": "https://www.nordstrom.com",
+  "platform": "generic",
+  "min_products": 500,
+  "products": [
+    {
+      "title": "Nike Dunk Low Retro Sneaker",
+      "price": "115.00",
+      "currency": "USD",
+      "vendor": "Nike",
+      "in_stock": true
+    },
+    {
+      "title": "Birkenstock Arizona Slide Sandal",
+      "price": "110.00",
+      "currency": "USD",
+      "vendor": "Birkenstock",
+      "in_stock": true
+    },
+    {
+      "title": "UGG Classic Mini II Genuine Shearling Lined Boot",
+      "price": "150.00",
+      "currency": "USD",
+      "vendor": "UGG",
+      "in_stock": true
+    }
+  ]
+}
