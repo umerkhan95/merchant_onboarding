@@ -18,7 +18,7 @@ class ProgressTracker:
             redis_client: Async Redis client instance
         """
         self.redis = redis_client
-        self.ttl_seconds = 86400  # 24 hours
+        self.ttl_seconds = 604800  # 7 days
 
     def _get_key(self, job_id: str) -> str:
         """Get Redis key for job progress.
@@ -111,14 +111,53 @@ class ProgressTracker:
             value_str = value.decode() if isinstance(value, bytes) else value
 
             # Parse numeric fields
-            if field_str in ("processed", "total"):
-                result[field_str] = int(value_str)
+            if field_str in ("processed", "total", "products_count"):
+                try:
+                    result[field_str] = int(value_str)
+                except (ValueError, TypeError):
+                    result[field_str] = 0
             elif field_str == "percentage":
                 result[field_str] = float(value_str)
             else:
                 result[field_str] = value_str
 
         return result
+
+    async def set_metadata(self, job_id: str, **fields: str | int) -> None:
+        """Store persistent metadata fields on a job hash.
+
+        Separate from update() so existing progress calls are untouched.
+
+        Args:
+            job_id: Unique job identifier
+            **fields: Metadata key-value pairs (e.g. shop_url, platform, started_at)
+        """
+        if not fields:
+            return
+        key = self._get_key(job_id)
+        await self.redis.hset(key, mapping=fields)  # type: ignore
+        await self.redis.expire(key, self.ttl_seconds)
+
+    async def list_all_jobs(self) -> list[dict[str, Any]]:
+        """List all tracked jobs by scanning progress:* keys.
+
+        Returns:
+            List of job dicts (each includes job_id extracted from key)
+        """
+        jobs: list[dict[str, Any]] = []
+        cursor: int = 0
+        while True:
+            cursor, keys = await self.redis.scan(cursor=cursor, match="progress:*", count=100)
+            for key in keys:
+                key_str = key.decode() if isinstance(key, bytes) else key
+                job_id = key_str.removeprefix("progress:")
+                data = await self.get(job_id)
+                if data:
+                    data["job_id"] = job_id
+                    jobs.append(data)
+            if cursor == 0:
+                break
+        return jobs
 
     async def delete(self, job_id: str) -> None:
         """Delete job progress from Redis.

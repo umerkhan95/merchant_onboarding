@@ -7,6 +7,7 @@ Contains NO business logic itself - only calls components in order.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from app.extractors.base import ExtractionResult
@@ -100,12 +101,18 @@ class Pipeline:
                 status=JobStatus.DETECTING,
                 current_step="Detecting e-commerce platform",
             )
+            await self.progress.set_metadata(
+                job_id,
+                shop_url=shop_url,
+                started_at=datetime.now(timezone.utc).isoformat(),
+            )
 
             platform_result = await self.detector.detect(shop_url)
             platform = platform_result.platform
             logger.info(
                 f"Platform detected: {platform} (confidence: {platform_result.confidence:.2f})"
             )
+            await self.progress.set_metadata(job_id, platform=platform.value)
 
             # Step 2: Discover product URLs
             await self.progress.update(
@@ -180,6 +187,7 @@ class Pipeline:
 
             raw_products = extraction_result.products
             extraction_tier = extraction_result.tier
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
 
             # Step 4: Normalize products
             await self.progress.update(
@@ -234,6 +242,11 @@ class Pipeline:
                 total=len(normalized_products),
                 status=JobStatus.COMPLETED,
                 current_step="Pipeline completed successfully",
+            )
+            await self.progress.set_metadata(
+                job_id,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                products_count=len(normalized_products),
             )
 
             logger.info(f"Pipeline completed for job {job_id}")

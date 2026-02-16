@@ -72,10 +72,24 @@ SELECT_PRODUCTS_BY_SHOP = """
 SELECT * FROM products WHERE shop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3;
 """
 
+SELECT_PRODUCTS_BY_DOMAIN = """
+SELECT * FROM products
+WHERE shop_id LIKE '%' || $1 || '%'
+ORDER BY created_at DESC LIMIT $2 OFFSET $3;
+"""
+
 COUNT_PRODUCTS_BY_SHOP = """
 SELECT COUNT(*) FROM products WHERE shop_id = $1;
 """
 
+COUNT_PRODUCTS_BY_DOMAIN = """
+SELECT COUNT(*) FROM products WHERE shop_id LIKE '%' || $1 || '%';
+"""
+
 SELECT_PRODUCT_BY_ID = """
 SELECT * FROM products WHERE id = $1;
+"""
+
+COUNT_ALL_PRODUCTS = """
+SELECT COUNT(*) FROM products;
 """

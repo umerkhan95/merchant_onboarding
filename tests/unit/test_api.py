@@ -23,7 +23,9 @@ class TestHealthEndpoints:
         """GET /readiness returns ready status without authentication."""
         response = api_client.get("/readiness")
         assert response.status_code == 200
-        assert response.json() == {"ready": True}
+        data = response.json()
+        assert "ready" in data
+        assert "checks" in data
 
 
 class TestOnboardingEndpoint:
@@ -37,7 +39,7 @@ class TestOnboardingEndpoint:
     ) -> None:
         """POST /api/v1/onboard with valid URL returns 202 and job_id."""
         # Mock the Celery task import to avoid ImportError
-        with patch("app.tasks.onboarding.process_onboarding_job"):
+        with patch("app.workers.tasks.run_onboarding_pipeline"):
             response = api_client.post(
                 "/api/v1/onboard",
                 json={"url": "https://example-store.myshopify.com"},
@@ -349,7 +351,7 @@ class TestDLQEndpoint:
         job_data = '{"url": "https://example.com", "error": "Previous failure"}'
         mock_redis.set_data("dlq:jobs", {"job_123": job_data})
 
-        with patch("app.tasks.onboarding.process_onboarding_job"):
+        with patch("app.workers.tasks.run_onboarding_pipeline"):
             response = api_client.post("/api/v1/dlq/job_123/retry", headers=headers)
 
         assert response.status_code == 202

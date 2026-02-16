@@ -322,7 +322,7 @@ class TestProgressTracker:
         assert mapping["current_step"] == "Extracting products"
 
         # Verify expire was called
-        mock_redis.expire.assert_called_once_with("progress:job-123", 86400)
+        mock_redis.expire.assert_called_once_with("progress:job-123", 604800)
 
     @pytest.mark.asyncio
     async def test_update_with_error(

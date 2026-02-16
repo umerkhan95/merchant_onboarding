@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str = "http://127.0.0.1:54331"
     supabase_key: str = "your-supabase-key"
-    database_url: str = "postgresql://postgres:postgres@127.0.0.1:54332/postgres"
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/merchant_onboarding"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

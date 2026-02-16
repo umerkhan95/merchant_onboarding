@@ -46,6 +46,36 @@ class MockRedis:
                 count += 1
         return count
 
+    async def setnx(self, key: str, value: Any) -> bool:
+        """Mock setnx."""
+        if key not in self._data:
+            self._data[key] = value
+            return True
+        return False
+
+    async def get(self, key: str) -> Any:
+        """Mock get."""
+        return self._data.get(key)
+
+    async def zadd(self, key: str, mapping: dict[str, float]) -> int:
+        """Mock zadd."""
+        if key not in self._data:
+            self._data[key] = {}
+        self._data[key].update(mapping)
+        return len(mapping)
+
+    async def zrangebyscore(
+        self, key: str, min_score: float | str, max_score: float | str
+    ) -> list:
+        """Mock zrangebyscore."""
+        return list(self._data.get(key, {}).keys())
+
+    async def zremrangebyscore(
+        self, key: str, min_score: float | str, max_score: float | str
+    ) -> int:
+        """Mock zremrangebyscore."""
+        return 0
+
     async def expire(self, key: str, seconds: int) -> bool:
         """Mock expire."""
         return True

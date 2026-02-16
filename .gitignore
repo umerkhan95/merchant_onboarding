@@ -38,8 +38,20 @@ celerybeat-schedule
 # Docker
 docker-compose.override.yml
 
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/node_modules/
+
 # Claude Code
 .claude/
+
+# Playwright MCP
+.playwright-mcp/
+
+# Screenshots
+*.png
+screenshots/
 
 # Supabase local
 supabase/.branches/

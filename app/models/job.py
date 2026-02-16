@@ -92,6 +92,12 @@ class JobProgress(BaseModel):
     status: JobStatus = Field(..., description="Current job status")
     current_step: str = Field(..., description="Current processing step description")
     error: str | None = Field(None, description="Error message if status is failed")
+    shop_url: str | None = Field(None, description="Shop URL being processed")
+    platform: str | None = Field(None, description="Detected platform")
+    extraction_tier: str | None = Field(None, description="Extraction tier used")
+    products_count: int | None = Field(None, description="Total products ingested")
+    started_at: str | None = Field(None, description="ISO timestamp when job started")
+    completed_at: str | None = Field(None, description="ISO timestamp when job completed")
 
     @field_validator("percentage", mode="before")
     @classmethod

@@ -2,14 +2,55 @@
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import math
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import require_api_key
+from app.api.deps import get_db, require_api_key
+from app.db.queries import (
+    COUNT_PRODUCTS_BY_DOMAIN,
+    COUNT_PRODUCTS_BY_SHOP,
+    SELECT_PRODUCTS_BY_DOMAIN,
+    SELECT_PRODUCTS_BY_SHOP,
+    SELECT_PRODUCT_BY_ID,
+)
 from app.exceptions.errors import NotFoundError
 
+if TYPE_CHECKING:
+    from app.db.supabase_client import DatabaseClient
+
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    """Convert an asyncpg Record to a JSON-safe dict."""
+    d = dict(row)
+    for k, v in d.items():
+        if isinstance(v, Decimal):
+            d[k] = float(v)
+        elif isinstance(v, datetime):
+            d[k] = v.isoformat()
+        elif isinstance(v, str) and k in ("variants", "tags", "raw_data"):
+            try:
+                d[k] = json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return d
+
+
+def _extract_domain(shop_id: str) -> str:
+    """Extract bare domain from a shop URL for fuzzy matching."""
+    parsed = urlparse(shop_id if "://" in shop_id else f"https://{shop_id}")
+    hostname = parsed.hostname or shop_id
+    # Strip www. prefix for broader matching
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return hostname
 
 
 @router.get("", dependencies=[require_api_key])
@@ -17,29 +58,39 @@ async def list_products(
     shop_id: str = Query(..., description="Shop/merchant identifier"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(50, ge=1, le=100, description="Items per page"),
+    db: DatabaseClient | None = Depends(get_db),
 ) -> dict[str, Any]:
-    """List products for a shop with pagination.
+    """List products for a shop with pagination."""
+    if db is None:
+        return {
+            "data": [],
+            "pagination": {"page": page, "per_page": per_page, "total": 0, "total_pages": 0},
+            "shop_id": shop_id,
+        }
 
-    Args:
-        shop_id: Shop/merchant identifier
-        page: Page number (1-indexed)
-        per_page: Number of items per page (max 100)
+    offset = (page - 1) * per_page
 
-    Returns:
-        Paginated product list with metadata
+    async with db.pool.acquire() as conn:
+        # Try exact match first
+        rows = await conn.fetch(SELECT_PRODUCTS_BY_SHOP, shop_id, per_page, offset)
+        count_row = await conn.fetchval(COUNT_PRODUCTS_BY_SHOP, shop_id)
+        total = count_row or 0
 
-    Note:
-        This is a placeholder implementation. Will be wired to the database
-        in the pipeline orchestrator ticket.
-    """
-    # Placeholder response with pagination metadata
+        # Fall back to domain-based match if exact match found nothing
+        if total == 0:
+            domain = _extract_domain(shop_id)
+            rows = await conn.fetch(SELECT_PRODUCTS_BY_DOMAIN, domain, per_page, offset)
+            total = await conn.fetchval(COUNT_PRODUCTS_BY_DOMAIN, domain) or 0
+
+    total_pages = math.ceil(total / per_page) if per_page > 0 else 0
+
     return {
-        "data": [],
+        "data": [_row_to_dict(r) for r in rows],
         "pagination": {
             "page": page,
             "per_page": per_page,
-            "total": 0,
-            "total_pages": 0,
+            "total": total,
+            "total_pages": total_pages,
         },
         "shop_id": shop_id,
     }
@@ -48,21 +99,16 @@ async def list_products(
 @router.get("/{product_id}", dependencies=[require_api_key])
 async def get_product(
     product_id: int,
+    db: DatabaseClient | None = Depends(get_db),
 ) -> dict[str, Any]:
-    """Get single product by ID.
+    """Get single product by ID."""
+    if db is None:
+        raise NotFoundError(f"Product {product_id} not found (database unavailable)")
 
-    Args:
-        product_id: Unique product identifier
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow(SELECT_PRODUCT_BY_ID, product_id)
 
-    Returns:
-        Product details
+    if row is None:
+        raise NotFoundError(f"Product {product_id} not found")
 
-    Raises:
-        NotFoundError: Product not found (always raised in placeholder)
-
-    Note:
-        This is a placeholder implementation. Will be wired to the database
-        in the pipeline orchestrator ticket.
-    """
-    # Placeholder - always returns 404
-    raise NotFoundError(f"Product {product_id} not found")
+    return _row_to_dict(row)
