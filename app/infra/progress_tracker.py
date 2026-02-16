@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import redis.asyncio as redis
+
+# Jobs stuck in these states for longer than STALE_TIMEOUT are marked failed
+_TERMINAL_STATES = {"completed", "failed"}
+_STALE_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
 
 
 class ProgressTracker:
@@ -141,6 +146,9 @@ class ProgressTracker:
     async def list_all_jobs(self) -> list[dict[str, Any]]:
         """List all tracked jobs by scanning progress:* keys.
 
+        Automatically marks stale jobs (stuck in non-terminal states
+        for longer than 30 minutes) as failed before returning.
+
         Returns:
             List of job dicts (each includes job_id extracted from key)
         """
@@ -157,7 +165,42 @@ class ProgressTracker:
                     jobs.append(data)
             if cursor == 0:
                 break
+
+        # Mark stale jobs as failed
+        now = datetime.now(timezone.utc)
+        for job in jobs:
+            status = job.get("status", "")
+            if status in _TERMINAL_STATES:
+                continue
+            started = job.get("started_at")
+            if not started:
+                # No started_at means very old job — mark as failed
+                await self._mark_stale(job["job_id"])
+                job["status"] = "failed"
+                job["error"] = "Stale: no start time recorded"
+                continue
+            try:
+                started_dt = datetime.fromisoformat(started)
+                if started_dt.tzinfo is None:
+                    started_dt = started_dt.replace(tzinfo=timezone.utc)
+                age = (now - started_dt).total_seconds()
+                if age > _STALE_TIMEOUT_SECONDS:
+                    await self._mark_stale(job["job_id"])
+                    job["status"] = "failed"
+                    job["error"] = f"Stale: stuck for {int(age // 60)} minutes"
+            except (ValueError, TypeError):
+                pass
+
         return jobs
+
+    async def _mark_stale(self, job_id: str) -> None:
+        """Mark a stale job as failed in Redis."""
+        key = self._get_key(job_id)
+        await self.redis.hset(key, mapping={  # type: ignore
+            "status": "failed",
+            "error": "Pipeline interrupted — job timed out",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     async def delete(self, job_id: str) -> None:
         """Delete job progress from Redis.
