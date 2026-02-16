@@ -17,7 +17,7 @@ export function Nav() {
   const { theme, setTheme } = useTheme();
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
+    <aside className="sticky top-0 flex h-screen w-56 shrink-0 flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
       <div className="mb-8">
         <h1 className="text-lg font-bold text-[hsl(var(--foreground))]">
           Merchant Onboarding

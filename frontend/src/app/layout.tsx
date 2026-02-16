@@ -20,9 +20,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider>
-          <div className="flex h-screen overflow-hidden">
+          <div className="flex min-h-screen">
             <Nav />
-            <main className="flex-1 overflow-y-auto p-6">{children}</main>
+            <main className="flex-1 p-6">{children}</main>
           </div>
         </ThemeProvider>
       </body>

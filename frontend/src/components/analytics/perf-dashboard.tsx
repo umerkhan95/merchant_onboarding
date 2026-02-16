@@ -44,6 +44,7 @@ function getMethodColor(method: string): string {
 export function PerfDashboard({ data }: PerfDashboardProps) {
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const [timeAgo, setTimeAgo] = useState<string>("0s");
+  const [hoveredRow, setHoveredRow] = useState<number | null>(null);
 
   useEffect(() => {
     if (data) {
@@ -62,7 +63,7 @@ export function PerfDashboard({ data }: PerfDashboardProps) {
 
   if (!data) {
     return (
-      <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 text-center">
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 text-center">
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
           No performance data available
         </p>
@@ -77,21 +78,25 @@ export function PerfDashboard({ data }: PerfDashboardProps) {
       label: "Requests/min",
       value: data.requests_per_minute.toFixed(1),
       color: getRequestsColor(data.requests_per_minute),
+      accent: "from-cyan-500 to-blue-600",
     },
     {
       label: "p95 Latency",
       value: `${data.p95_ms.toFixed(1)}ms`,
       color: getLatencyColor(data.p95_ms),
+      accent: "from-amber-500 to-orange-600",
     },
     {
       label: "Error Rate",
       value: `${data.error_rate.toFixed(1)}%`,
       color: getErrorRateColor(data.error_rate),
+      accent: "from-rose-500 to-red-600",
     },
     {
       label: "Uptime",
       value: formatUptime(data.uptime_seconds),
       color: "text-[hsl(var(--foreground))]",
+      accent: "from-green-500 to-emerald-600",
     },
   ];
 
@@ -101,18 +106,27 @@ export function PerfDashboard({ data }: PerfDashboardProps) {
         <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">
           API Performance
         </h2>
-        <span className="text-xs text-[hsl(var(--muted-foreground))]">
-          Updated {timeAgo} ago
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+          </span>
+          <span className="text-xs text-[hsl(var(--muted-foreground))]">
+            Updated {timeAgo} ago
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {statCards.map((card) => (
           <div
             key={card.label}
-            className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4"
+            className="group relative overflow-hidden rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 transition-all duration-200 hover:shadow-lg hover:shadow-black/5 hover:-translate-y-0.5"
           >
-            <p className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+            <div
+              className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${card.accent} opacity-0 transition-opacity duration-200 group-hover:opacity-100`}
+            />
+            <p className="text-xs font-medium tracking-wide uppercase text-[hsl(var(--muted-foreground))]">
               {card.label}
             </p>
             <p className={`mt-1 text-2xl font-bold ${card.color}`}>
@@ -122,8 +136,8 @@ export function PerfDashboard({ data }: PerfDashboardProps) {
         ))}
       </div>
 
-      <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
-        <div className="border-b border-[hsl(var(--border))] px-4 py-3">
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
+        <div className="border-b border-[hsl(var(--border))] px-5 py-3">
           <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
             Endpoint Performance
           </h3>
@@ -132,64 +146,74 @@ export function PerfDashboard({ data }: PerfDashboardProps) {
           <table className="w-full">
             <thead className="border-b border-[hsl(var(--border))]">
               <tr className="text-left">
-                <th className="px-4 py-3 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                <th className="px-5 py-3 text-xs font-medium tracking-wide uppercase text-[hsl(var(--muted-foreground))]">
                   Method
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                <th className="px-5 py-3 text-xs font-medium tracking-wide uppercase text-[hsl(var(--muted-foreground))]">
                   Endpoint
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                <th className="px-5 py-3 text-right text-xs font-medium tracking-wide uppercase text-[hsl(var(--muted-foreground))]">
                   Requests
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                <th className="px-5 py-3 text-right text-xs font-medium tracking-wide uppercase text-[hsl(var(--muted-foreground))]">
                   Avg (ms)
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                <th className="px-5 py-3 text-right text-xs font-medium tracking-wide uppercase text-[hsl(var(--muted-foreground))]">
                   p95 (ms)
                 </th>
               </tr>
             </thead>
             <tbody>
-              {sortedEndpoints.map((endpoint, index) => (
-                <tr
-                  key={`${endpoint.method}-${endpoint.endpoint}`}
-                  className={
-                    index < sortedEndpoints.length - 1
-                      ? "border-b border-[hsl(var(--border))]"
-                      : ""
-                  }
-                >
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${getMethodColor(
-                        endpoint.method
+              {sortedEndpoints.map((endpoint, index) => {
+                const isRowHovered = hoveredRow === index;
+                return (
+                  <tr
+                    key={`${endpoint.method}-${endpoint.endpoint}`}
+                    className={`transition-colors duration-150 ${
+                      isRowHovered ? "bg-[hsl(var(--muted))]" : ""
+                    } ${
+                      index < sortedEndpoints.length - 1
+                        ? "border-b border-[hsl(var(--border))]"
+                        : ""
+                    }`}
+                    onMouseEnter={() => setHoveredRow(index)}
+                    onMouseLeave={() => setHoveredRow(null)}
+                  >
+                    <td className="px-5 py-3">
+                      <span
+                        className={`inline-flex rounded-md px-2 py-1 text-xs font-medium transition-transform duration-150 ${getMethodColor(
+                          endpoint.method
+                        )}`}
+                        style={{
+                          transform: isRowHovered ? "scale(1.05)" : "scale(1)",
+                        }}
+                      >
+                        {endpoint.method}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 font-mono text-sm text-[hsl(var(--foreground))]">
+                      {endpoint.endpoint}
+                    </td>
+                    <td className="px-5 py-3 text-right text-sm font-medium text-[hsl(var(--foreground))]">
+                      {endpoint.count.toLocaleString()}
+                    </td>
+                    <td
+                      className={`px-5 py-3 text-right text-sm font-medium ${getLatencyColor(
+                        endpoint.avg_ms
                       )}`}
                     >
-                      {endpoint.method}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-sm text-[hsl(var(--foreground))]">
-                    {endpoint.endpoint}
-                  </td>
-                  <td className="px-4 py-3 text-right text-sm text-[hsl(var(--foreground))]">
-                    {endpoint.count.toLocaleString()}
-                  </td>
-                  <td
-                    className={`px-4 py-3 text-right text-sm font-medium ${getLatencyColor(
-                      endpoint.avg_ms
-                    )}`}
-                  >
-                    {endpoint.avg_ms.toFixed(1)}
-                  </td>
-                  <td
-                    className={`px-4 py-3 text-right text-sm font-medium ${getLatencyColor(
-                      endpoint.p95_ms
-                    )}`}
-                  >
-                    {endpoint.p95_ms.toFixed(1)}
-                  </td>
-                </tr>
-              ))}
+                      {endpoint.avg_ms.toFixed(1)}
+                    </td>
+                    <td
+                      className={`px-5 py-3 text-right text-sm font-bold ${getLatencyColor(
+                        endpoint.p95_ms
+                      )}`}
+                    >
+                      {endpoint.p95_ms.toFixed(1)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
