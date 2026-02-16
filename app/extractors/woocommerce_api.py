@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from app.extractors.base import BaseExtractor
+from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,13 @@ class WooCommerceAPIExtractor(BaseExtractor):
         all_products: list[dict[str, Any]] = []
         base_url = shop_url.rstrip("/")
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        headers = {
+            **DEFAULT_HEADERS,
+            "User-Agent": get_default_user_agent(),
+            "Accept": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             page = 1
 
             while page <= self.max_pages:

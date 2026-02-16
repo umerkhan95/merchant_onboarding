@@ -9,12 +9,26 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.extractors.base import BaseExtractor
+from app.extractors.browser_config import (
+    DEFAULT_HEADERS,
+    get_default_user_agent,
+    fetch_html_with_browser,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class SchemaOrgExtractor(BaseExtractor):
     """Extract JSON-LD structured data from <script type='application/ld+json'> tags."""
+
+    @staticmethod
+    def _is_product_type(type_value) -> bool:
+        """Check if JSON-LD @type indicates a Product (handles arrays and IRIs)."""
+        if isinstance(type_value, str):
+            return "Product" in type_value
+        if isinstance(type_value, list):
+            return any("Product" in str(t) for t in type_value)
+        return False
 
     @staticmethod
     def extract_from_html(html: str, url: str) -> list[dict]:
@@ -43,18 +57,18 @@ class SchemaOrgExtractor(BaseExtractor):
 
                     # Handle single object
                     if isinstance(data, dict):
-                        if data.get("@type") == "Product":
+                        if SchemaOrgExtractor._is_product_type(data.get("@type")):
                             products.append(data)
                         # Handle @graph array (common pattern)
                         elif "@graph" in data and isinstance(data["@graph"], list):
                             for item in data["@graph"]:
-                                if isinstance(item, dict) and item.get("@type") == "Product":
+                                if isinstance(item, dict) and SchemaOrgExtractor._is_product_type(item.get("@type")):
                                     products.append(item)
 
                     # Handle array of objects
                     elif isinstance(data, list):
                         for item in data:
-                            if isinstance(item, dict) and item.get("@type") == "Product":
+                            if isinstance(item, dict) and SchemaOrgExtractor._is_product_type(item.get("@type")):
                                 products.append(item)
 
                 except json.JSONDecodeError as e:
@@ -76,6 +90,9 @@ class SchemaOrgExtractor(BaseExtractor):
     async def extract(self, url: str) -> list[dict]:
         """Extract JSON-LD structured data from page.
 
+        Tries httpx first (fast). Falls back to browser on HTTP errors (403, timeout)
+        which indicate bot protection or JS-rendered content.
+
         Args:
             url: Product page URL
 
@@ -83,7 +100,8 @@ class SchemaOrgExtractor(BaseExtractor):
             List of raw Product JSON-LD dicts. Empty list on error or if no Product found.
         """
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            headers = {**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()}
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0, headers=headers) as client:
                 response = await client.get(url)
                 response.raise_for_status()
                 html = response.text
@@ -91,7 +109,13 @@ class SchemaOrgExtractor(BaseExtractor):
             return self.extract_from_html(html, url)
 
         except httpx.HTTPStatusError as e:
-            logger.error("HTTP error fetching %s: %s", url, e)
+            if e.response.status_code in (403, 429, 503):
+                logger.warning("Schema.org blocked (%d) for %s, trying browser fallback", e.response.status_code, url)
+                html = await fetch_html_with_browser(url)
+                if html:
+                    return self.extract_from_html(html, url)
+            else:
+                logger.error("HTTP %d fetching %s", e.response.status_code, url)
             return []
         except httpx.RequestError as e:
             logger.error("Request error fetching %s: %s", url, e)

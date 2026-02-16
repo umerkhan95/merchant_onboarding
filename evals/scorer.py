@@ -160,7 +160,7 @@ class Scorer:
         Returns:
             1.0 if same truthiness, 0.0 otherwise
         """
-        truthy_values = {"true", "1", "yes", "in_stock", "available"}
+        truthy_values = {"true", "1", "yes", "in_stock", "instock", "available", "in stock"}
 
         expected_truthy = expected.strip().lower() in truthy_values
         extracted_truthy = extracted.strip().lower() in truthy_values
@@ -184,8 +184,9 @@ class Scorer:
         ext_parsed = urlparse(extracted.strip())
 
         # Normalize: compare scheme, netloc, path (ignore query/fragment)
-        exp_normalized = (exp_parsed.scheme.lower(), exp_parsed.netloc.lower(), exp_parsed.path)
-        ext_normalized = (ext_parsed.scheme.lower(), ext_parsed.netloc.lower(), ext_parsed.path)
+        # Strip trailing slashes from paths to treat /product and /product/ as equal
+        exp_normalized = (exp_parsed.scheme.lower(), exp_parsed.netloc.lower(), exp_parsed.path.rstrip("/"))
+        ext_normalized = (ext_parsed.scheme.lower(), ext_parsed.netloc.lower(), ext_parsed.path.rstrip("/"))
 
         # Exact match
         if exp_normalized == ext_normalized:

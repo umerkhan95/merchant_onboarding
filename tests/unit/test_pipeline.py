@@ -208,7 +208,7 @@ async def test_pipeline_generic_schema_org_fallback(pipeline, mock_progress_trac
 
                 assert result["platform"] == "generic"
                 assert result["total_extracted"] == 2  # 2 URLs
-                assert result["extraction_tier"] == "sitemap_css"
+                assert result["extraction_tier"] == "schema_org"
 
 
 @pytest.mark.asyncio
@@ -501,7 +501,7 @@ async def test_pipeline_skips_low_quality_probe(pipeline, mock_progress_tracker)
                 result = await pipeline.run("job-quality-gate", "https://example.com")
 
                 # Should have used OG tier (Schema.org was skipped due to low quality)
-                assert result["extraction_tier"] == "sitemap_css"
+                assert result["extraction_tier"] == "opengraph"
                 assert result["total_extracted"] == 2
 
                 # Schema.org extractor should have been called only once (probe)
@@ -594,3 +594,306 @@ async def test_pipeline_uses_extract_batch_for_full_extraction(
                 # extract_batch was called with all 3 URLs
                 batch_call_args = mock_extractor.extract_batch.call_args[0][0]
                 assert len(batch_call_args) == 3
+
+
+@pytest.mark.asyncio
+async def test_pipeline_shopify_fallback_on_empty_api_response(pipeline, mock_progress_tracker):
+    """Test Shopify falls back to extraction chain when API returns 0 products."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.SHOPIFY,
+            confidence=0.9,
+            signals=["api:/products.json"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = [
+                "https://example.com/product1",
+                "https://example.com/product2",
+            ]
+
+            # Shopify API returns empty
+            with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_shopify_class:
+                mock_shopify = AsyncMock()
+                mock_shopify.extract = AsyncMock(return_value=[])
+                mock_shopify_class.return_value = mock_shopify
+
+                # Schema.org returns good data as fallback
+                with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
+                    product_data = {
+                        "name": "Fallback Product",
+                        "description": "Product from fallback",
+                        "offers": {"price": "29.99", "priceCurrency": "USD"},
+                        "image": "https://example.com/img.jpg",
+                        "sku": "FALL-1",
+                    }
+                    mock_schema = AsyncMock()
+                    mock_schema.extract = AsyncMock(return_value=[product_data])
+                    mock_schema.extract_batch = AsyncMock(
+                        return_value=[product_data, product_data]
+                    )
+                    mock_schema_class.return_value = mock_schema
+
+                    result = await pipeline.run("job-shopify-fallback", "https://example.com")
+
+                    # Should have fallen back to Schema.org tier
+                    assert result["platform"] == "shopify"
+                    assert result["total_extracted"] == 2
+                    assert result["extraction_tier"] == "schema_org"
+
+                    # Shopify API should have been tried once
+                    assert mock_shopify.extract.call_count == 1
+                    # Schema.org should have been used for fallback
+                    assert mock_schema.extract_batch.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_opengraph_tier_correct(pipeline, mock_progress_tracker):
+    """Test that OpenGraph extraction returns correct ExtractionTier.OPENGRAPH."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.GENERIC,
+            confidence=1.0,
+            signals=["fallback:no-signals-detected"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = ["https://example.com/product1"]
+
+            # Schema.org returns empty, OpenGraph succeeds
+            with (
+                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+            ):
+                mock_schema = AsyncMock()
+                mock_schema.extract = AsyncMock(return_value=[])
+                mock_schema_class.return_value = mock_schema
+
+                og_product = {
+                    "og:title": "OpenGraph Product",
+                    "og:description": "OG description",
+                    "og:image": "https://example.com/og.jpg",
+                    "og:price:amount": "19.99",
+                }
+                mock_og = AsyncMock()
+                mock_og.extract = AsyncMock(return_value=[og_product])
+                mock_og.extract_batch = AsyncMock(return_value=[og_product])
+                mock_og_class.return_value = mock_og
+
+                result = await pipeline.run("job-og-tier", "https://example.com")
+
+                assert result["extraction_tier"] == "opengraph"
+                assert result["total_extracted"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_logs_warnings_when_smart_css_and_llm_not_configured(
+    pipeline, mock_progress_tracker, caplog
+):
+    """Test that pipeline logs warnings when SmartCSS and LLM extractors are not configured."""
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.GENERIC,
+            confidence=1.0,
+            signals=["fallback:no-signals-detected"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = ["https://example.com/product1"]
+
+            # All extractors return empty except hardcoded CSS
+            with (
+                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+                patch("app.services.pipeline.CSSExtractor") as mock_css_class,
+            ):
+                for mock_class in [mock_schema_class, mock_og_class]:
+                    mock_ext = AsyncMock()
+                    mock_ext.extract = AsyncMock(return_value=[])
+                    mock_class.return_value = mock_ext
+
+                # CSS returns data so we don't trigger needs_review
+                css_product = {
+                    "title": "CSS Product",
+                    "price": "$10",
+                    "description": "CSS extracted",
+                }
+                mock_css = AsyncMock()
+                mock_css.extract_batch = AsyncMock(return_value=[css_product])
+                mock_css_class.return_value = mock_css
+
+                await pipeline.run("job-warnings", "https://example.com")
+
+                # Check that warnings were logged
+                warnings = [rec.message for rec in caplog.records if rec.levelname == "WARNING"]
+                assert any("SmartCSS extractor not configured" in w for w in warnings)
+                assert any("LLM extractor not configured" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_shopify_no_fallback_when_api_has_products(pipeline, mock_progress_tracker):
+    """Test Shopify does NOT fall back when API returns products successfully."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.SHOPIFY,
+            confidence=0.9,
+            signals=["api:/products.json"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = [
+                "https://example.com/product1",
+                "https://example.com/product2",
+            ]
+
+            # Shopify API returns products
+            with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_shopify_class:
+                shopify_product = {
+                    "id": 123,
+                    "title": "API Product",
+                    "handle": "api-product",
+                    "variants": [{"price": "10.99"}],
+                }
+                mock_shopify = AsyncMock()
+                mock_shopify.extract = AsyncMock(return_value=[shopify_product])
+                mock_shopify_class.return_value = mock_shopify
+
+                # Schema.org should NOT be called since API succeeded
+                with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
+                    mock_schema = AsyncMock()
+                    mock_schema_class.return_value = mock_schema
+
+                    result = await pipeline.run("job-shopify-no-fallback", "https://example.com")
+
+                    # Should use API tier only
+                    assert result["platform"] == "shopify"
+                    assert result["total_extracted"] == 1
+                    assert result["extraction_tier"] == "api"
+
+                    # Shopify API should have been used
+                    assert mock_shopify.extract.call_count == 1
+                    # Schema.org should NOT have been instantiated (no fallback)
+                    assert mock_schema_class.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_merge_tier_fields_fills_gaps():
+    """Test that _merge_tier_fields fills missing fields from supplementary data."""
+    primary = [{"title": "Product A", "price": "29.99"}]
+    supplementary = [{"image": "https://example.com/img.jpg", "sku": "SKU-123"}]
+
+    result = Pipeline._merge_tier_fields(primary, supplementary)
+
+    assert len(result) == 1
+    assert result[0]["title"] == "Product A"
+    assert result[0]["price"] == "29.99"
+    assert result[0]["image"] == "https://example.com/img.jpg"
+    assert result[0]["sku"] == "SKU-123"
+
+
+@pytest.mark.asyncio
+async def test_merge_tier_fields_never_overwrites():
+    """Test that _merge_tier_fields never overwrites existing primary values."""
+    primary = [{"title": "Primary Title", "price": "29.99"}]
+    supplementary = [{"title": "Supplementary Title", "price": "19.99", "sku": "SKU-123"}]
+
+    result = Pipeline._merge_tier_fields(primary, supplementary)
+
+    assert result[0]["title"] == "Primary Title"
+    assert result[0]["price"] == "29.99"
+    assert result[0]["sku"] == "SKU-123"
+
+
+@pytest.mark.asyncio
+async def test_merge_tier_fields_empty_supplementary():
+    """Test that empty supplementary returns primary unchanged."""
+    primary = [{"title": "Product A", "price": "29.99"}]
+
+    result = Pipeline._merge_tier_fields(primary, [])
+
+    assert result == primary
+
+
+@pytest.mark.asyncio
+async def test_merge_tier_fields_empty_primary():
+    """Test that empty primary returns empty."""
+    supplementary = [{"title": "Product A", "price": "29.99"}]
+
+    result = Pipeline._merge_tier_fields([], supplementary)
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_merge_tier_fields_fills_empty_strings():
+    """Test that empty string values in primary are filled from supplementary."""
+    primary = [{"title": "Product A", "description": "", "price": "29.99"}]
+    supplementary = [{"description": "Good description", "vendor": "Acme"}]
+
+    result = Pipeline._merge_tier_fields(primary, supplementary)
+
+    assert result[0]["description"] == "Good description"
+    assert result[0]["vendor"] == "Acme"
+    assert result[0]["title"] == "Product A"
+
+
+@pytest.mark.asyncio
+async def test_merge_tier_fields_skips_empty_supplementary_values():
+    """Test that empty/None supplementary values are not merged."""
+    primary = [{"title": "Product A"}]
+    supplementary = [{"description": "", "sku": None, "vendor": "   ", "image": "https://img.jpg"}]
+
+    result = Pipeline._merge_tier_fields(primary, supplementary)
+
+    assert "description" not in result[0]
+    assert "sku" not in result[0]
+    assert "vendor" not in result[0]
+    assert result[0]["image"] == "https://img.jpg"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_merges_partial_probes(pipeline, mock_progress_tracker):
+    """Test that pipeline merges partial probe data from failed tiers into winning tier."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.GENERIC,
+            confidence=1.0,
+            signals=["fallback:no-signals-detected"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = ["https://example.com/product1"]
+
+            with (
+                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+            ):
+                # Schema.org returns partial data (no title → quality 0.0, fails probe)
+                schema_product = {
+                    "offers": {"price": "19.99", "priceCurrency": "USD"},
+                    "image": "https://example.com/schema-img.jpg",
+                }
+                mock_schema = AsyncMock()
+                mock_schema.extract = AsyncMock(return_value=[schema_product])
+                mock_schema_class.return_value = mock_schema
+
+                # OG returns good data (has title → passes quality gate)
+                og_product = {
+                    "og:title": "Product",
+                    "og:description": "Desc",
+                    "og:image": "https://example.com/og-img.jpg",
+                }
+                mock_og = AsyncMock()
+                mock_og.extract = AsyncMock(return_value=[og_product])
+                # extract_batch returns same product — should get merged with Schema.org partial
+                mock_og.extract_batch = AsyncMock(return_value=[og_product.copy()])
+                mock_og_class.return_value = mock_og
+
+                result = await pipeline.run("job-merge", "https://example.com")
+
+                # OG should win as primary tier
+                assert result["extraction_tier"] == "opengraph"
+                assert result["total_extracted"] == 1

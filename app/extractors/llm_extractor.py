@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from difflib import SequenceMatcher
 
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, LLMConfig
+from crawl4ai import (
+    AsyncWebCrawler,
+    DefaultMarkdownGenerator,
+    LLMConfig,
+)
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
 
 from app.extractors.base import BaseExtractor
-
-if TYPE_CHECKING:
-    pass
+from app.extractors.browser_config import (
+    StealthLevel,
+    get_browser_config,
+    get_crawl_config,
+    get_crawler_strategy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +36,23 @@ PRODUCT_EXTRACTION_SCHEMA = {
         "sku": {"type": "string", "description": "Product SKU or ID if shown"},
         "currency": {"type": "string", "description": "ISO 4217 currency code (e.g. USD, EUR)"},
         "in_stock": {"type": "boolean", "description": "Whether the product is in stock"},
+        "vendor": {"type": "string", "description": "Brand or vendor name (e.g. 'Nike', 'Apple')"},
+        "product_url": {"type": "string", "description": "Canonical URL of the product page"},
+        "product_type": {"type": "string", "description": "Product category or type (e.g. 'Headphones', 'T-Shirt')"},
     },
     "required": ["title"],
 }
 
 EXTRACTION_INSTRUCTION = (
-    "Extract ALL product information visible on this page. "
-    "For each product, extract: title (required), price, description, "
-    "image URL, SKU, currency code, and stock status. "
-    "If a field is not found, omit it. Return a JSON array of products."
+    "This is a product detail page for a SINGLE product. "
+    "Extract ONLY the main product being sold — ignore related products, "
+    "recommendations, navigation items, and upsells. "
+    "Extract ALL of these fields if visible anywhere on the page: "
+    "title (required), price (CRITICAL — include the full price with currency symbol, "
+    "e.g. '$29.99' or '£45.00'), description, main product image URL, SKU or product ID, "
+    "ISO 4217 currency code (e.g. USD, EUR, GBP), stock availability (true/false), "
+    "brand or vendor name, canonical product page URL, and product category or type. "
+    "Return a JSON array containing exactly ONE product object."
 )
 
 
@@ -48,17 +63,35 @@ class LLMExtractor(BaseExtractor):
     read the page content and extract structured product data.
     """
 
-    def __init__(self, llm_config: LLMConfig, temperature: float = 0.2, max_tokens: int = 4000):
+    def __init__(
+        self,
+        llm_config: LLMConfig,
+        temperature: float = 0.2,
+        max_tokens: int = 4000,
+        stealth_level: StealthLevel = StealthLevel.STANDARD,
+    ):
         """Initialize LLM extractor.
 
         Args:
             llm_config: crawl4ai LLMConfig with provider and API key
             temperature: LLM temperature (lower = more deterministic)
             max_tokens: Max output tokens
+            stealth_level: Anti-bot protection tier for browser sessions
         """
         self.llm_config = llm_config
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.stealth_level = stealth_level
+
+    @staticmethod
+    def _create_markdown_generator():
+        """Create markdown generator for LLM input.
+
+        Uses default markdown without PruningContentFilter because the filter
+        aggressively strips product content, producing empty fit_markdown on
+        most e-commerce sites. Regular markdown with chunking is more reliable.
+        """
+        return DefaultMarkdownGenerator()
 
     def _create_strategy(self) -> LLMExtractionStrategy:
         """Create a fresh LLMExtractionStrategy instance."""
@@ -67,16 +100,72 @@ class LLMExtractor(BaseExtractor):
             schema=PRODUCT_EXTRACTION_SCHEMA,
             extraction_type="schema",
             instruction=EXTRACTION_INSTRUCTION,
-            chunk_token_threshold=3000,
+            chunk_token_threshold=8000,
             overlap_rate=0.1,
             apply_chunking=True,
-            input_format="fit_markdown",
+            input_format="markdown",
             verbose=False,
             extra_args={
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             },
         )
+
+    @staticmethod
+    def _merge_chunk_products(products: list[dict]) -> list[dict]:
+        """Merge duplicate products extracted from different chunks of the same page.
+
+        When a page is split into chunks, each chunk may extract a partial
+        product (e.g. one chunk has title+price, another has title+description).
+        This merges products with similar titles into one complete product.
+        """
+        if len(products) <= 1:
+            return products
+
+        merged: list[dict] = []
+        used: set[int] = set()
+
+        for i, product in enumerate(products):
+            if i in used:
+                continue
+
+            combined = dict(product)
+            used.add(i)
+            title_i = (product.get("title") or "").strip().lower()
+
+            if not title_i:
+                continue
+
+            # Find similar products to merge
+            for j in range(i + 1, len(products)):
+                if j in used:
+                    continue
+
+                other = products[j]
+                title_j = (other.get("title") or "").strip().lower()
+                if not title_j:
+                    continue
+
+                # Check if titles are similar enough to merge (chunk artifacts)
+                # Strict criteria: exact match, prefix match, or very high similarity
+                similar = False
+                if title_i == title_j:
+                    similar = True
+                elif title_i.startswith(title_j) or title_j.startswith(title_i):
+                    similar = True
+                elif SequenceMatcher(None, title_i, title_j).ratio() > 0.9:
+                    similar = True
+
+                if similar:
+                    # Merge: fill in any missing fields from the other product
+                    for key, value in other.items():
+                        if value and (key not in combined or not combined[key]):
+                            combined[key] = value
+                    used.add(j)
+
+            merged.append(combined)
+
+        return merged
 
     async def extract(self, url: str) -> list[dict]:
         """Extract products from any page using LLM.
@@ -89,16 +178,18 @@ class LLMExtractor(BaseExtractor):
         """
         strategy = self._create_strategy()
         try:
-            browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
-            crawler_config = CrawlerRunConfig(
+            browser_config = get_browser_config(self.stealth_level)
+            crawler_config = get_crawl_config(
+                stealth_level=self.stealth_level,
                 extraction_strategy=strategy,
-                cache_mode="bypass",
-                wait_until="domcontentloaded",
-                page_timeout=30000,
-                delay_before_return_html=2.0,
+                markdown_generator=self._create_markdown_generator(),
             )
 
-            async with AsyncWebCrawler(config=browser_config) as crawler:
+            crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
                 result = await crawler.arun(url=url, config=crawler_config)
 
                 if not result.success:
@@ -123,6 +214,17 @@ class LLMExtractor(BaseExtractor):
                 else:
                     products = []
 
+                # Merge partial products from different chunks of the same page
+                products = self._merge_chunk_products(products)
+
+                # Log token usage
+                try:
+                    usage = strategy.show_usage()
+                    if usage:
+                        logger.info("LLM token usage for %s: %s", url, usage)
+                except Exception:
+                    pass
+
                 logger.info("LLM extracted %d products from %s", len(products), url)
                 return products
 
@@ -140,13 +242,11 @@ class LLMExtractor(BaseExtractor):
             return []
 
         strategy = self._create_strategy()
-        browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
-        crawler_config = CrawlerRunConfig(
+        browser_config = get_browser_config(self.stealth_level)
+        crawler_config = get_crawl_config(
+            stealth_level=self.stealth_level,
             extraction_strategy=strategy,
-            cache_mode="bypass",
-            wait_until="domcontentloaded",
-            page_timeout=30000,
-            delay_before_return_html=2.0,
+            markdown_generator=self._create_markdown_generator(),
         )
         dispatcher = MemoryAdaptiveDispatcher(
             max_session_permit=5,
@@ -155,7 +255,11 @@ class LLMExtractor(BaseExtractor):
 
         all_products = []
         try:
-            async with AsyncWebCrawler(config=browser_config) as crawler:
+            crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
                 results = await crawler.arun_many(
                     urls=urls,
                     config=crawler_config,
@@ -167,15 +271,27 @@ class LLMExtractor(BaseExtractor):
                     try:
                         extracted = json.loads(result.extracted_content)
                         if isinstance(extracted, dict):
-                            if extracted.get("title"):
-                                all_products.append(extracted)
+                            url_products = [extracted] if extracted.get("title") else []
                         elif isinstance(extracted, list):
-                            all_products.extend(
+                            url_products = [
                                 p for p in extracted
                                 if isinstance(p, dict) and p.get("title")
-                            )
+                            ]
+                        else:
+                            url_products = []
+                        # Merge partial products from chunks of this URL
+                        url_products = self._merge_chunk_products(url_products)
+                        all_products.extend(url_products)
                     except json.JSONDecodeError:
                         logger.error("Failed to parse LLM JSON from %s", result.url)
+
+                # Log token usage for batch
+                try:
+                    usage = strategy.show_usage()
+                    if usage:
+                        logger.info("LLM batch token usage: %s", usage)
+                except Exception:
+                    pass
         except Exception as e:
             logger.exception("Batch LLM extraction failed: %s", e)
 

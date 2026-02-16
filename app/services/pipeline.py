@@ -282,6 +282,12 @@ class Pipeline:
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
+            # Fallback to full chain on discovered URLs if API returned nothing
+            if not raw_products and urls:
+                logger.info("Shopify API returned 0 products, falling back to extraction chain")
+                raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                    urls, shop_url, job_id
+                )
 
         elif platform == Platform.WOOCOMMERCE:
             extractor = WooCommerceAPIExtractor()
@@ -334,14 +340,13 @@ class Pipeline:
         job_id: str,
         css_schema: dict | None = None,
     ) -> tuple[list[dict], ExtractionTier]:
-        """Try extraction strategies in order: Schema.org → OG → CSS → SmartCSS → LLM.
+        """Try extraction strategies in priority order with cross-tier field merging.
 
-        5-tier fallback (Tiers 2-5, Tier 1 is platform API handled above):
-        - Tier 2: Schema.org JSON-LD
-        - Tier 3: OpenGraph meta tags
-        - Tier 4: SmartCSS (auto-generated selectors, cached per domain)
-        - Tier 5: LLM extraction (universal fallback)
-        Falls back to hardcoded CSS if no LLM extractors configured.
+        Probes tiers sequentially. Once an acceptable tier is found, commits to
+        full extraction with it and merges supplementary fields from any partial
+        results collected during earlier (failed) probes.
+
+        Priority: Schema.org > OpenGraph > SmartCSS > LLM > CSS
 
         Args:
             urls: List of URLs to extract from
@@ -356,20 +361,28 @@ class Pipeline:
             return [], ExtractionTier.DEEP_CRAWL
 
         probe_url = urls[0]
+        # Partial results from probed tiers (for merging into winning tier)
+        partial_probes: list[dict] = []
 
         # Tier 2: Schema.org on first URL
         schema_extractor = SchemaOrgExtractor()
         schema_products = await self._extract_with_circuit_breaker(schema_extractor, probe_url, shop_url)
         if self._probe_acceptable(schema_products, "Schema.org"):
             products = await self._extract_from_urls(schema_extractor, urls, shop_url, job_id)
-            return products, ExtractionTier.SITEMAP_CSS
+            return products, ExtractionTier.SCHEMA_ORG
+        if schema_products:
+            partial_probes.extend(schema_products)
 
         # Tier 3: OpenGraph on first URL
         og_extractor = OpenGraphExtractor()
         og_products = await self._extract_with_circuit_breaker(og_extractor, probe_url, shop_url)
         if self._probe_acceptable(og_products, "OpenGraph"):
             products = await self._extract_from_urls(og_extractor, urls, shop_url, job_id)
-            return products, ExtractionTier.SITEMAP_CSS
+            if partial_probes:
+                products = self._merge_tier_fields(products, partial_probes)
+            return products, ExtractionTier.OPENGRAPH
+        if og_products:
+            partial_probes.extend(og_products)
 
         # Tier 4: SmartCSS (auto-generated selectors, if configured)
         if self.smart_css:
@@ -377,7 +390,13 @@ class Pipeline:
             smart_products = await self._extract_with_circuit_breaker(self.smart_css, probe_url, shop_url)
             if self._probe_acceptable(smart_products, "SmartCSS"):
                 products = await self._extract_from_urls(self.smart_css, urls, shop_url, job_id)
+                if partial_probes:
+                    products = self._merge_tier_fields(products, partial_probes)
                 return products, ExtractionTier.SMART_CSS
+            if smart_products:
+                partial_probes.extend(smart_products)
+        else:
+            logger.warning("SmartCSS extractor not configured — skipping Tier 4")
 
         # Tier 5: LLM extraction (universal fallback, if configured)
         if self.llm_extractor:
@@ -385,14 +404,68 @@ class Pipeline:
             llm_products = await self._extract_with_circuit_breaker(self.llm_extractor, probe_url, shop_url)
             if self._probe_acceptable(llm_products, "LLM"):
                 products = await self._extract_from_urls(self.llm_extractor, urls, shop_url, job_id)
+                if partial_probes:
+                    products = self._merge_tier_fields(products, partial_probes)
                 return products, ExtractionTier.LLM
+        else:
+            logger.warning("LLM extractor not configured — skipping Tier 5")
 
-        # Fallback: hardcoded CSS (for when no LLM is configured)
+        # Fallback: hardcoded CSS (for when no tier probe was acceptable)
         schema = css_schema or GENERIC_SCHEMA
         logger.info("Falling back to hardcoded CSS extraction")
         css_extractor = CSSExtractor(schema)
         products = await self._extract_from_urls(css_extractor, urls, shop_url, job_id)
+        if partial_probes:
+            products = self._merge_tier_fields(products, partial_probes)
         return products, ExtractionTier.DEEP_CRAWL
+
+    @staticmethod
+    def _merge_tier_fields(
+        primary: list[dict], supplementary: list[dict]
+    ) -> list[dict]:
+        """Merge non-empty fields from supplementary tier probes into primary products.
+
+        For each product in primary, fills empty/missing fields with values from
+        supplementary dicts. Primary values are never overwritten.
+
+        Args:
+            primary: Products from the best tier (full extraction)
+            supplementary: Products from other tier probes (single-URL probe results)
+
+        Returns:
+            Primary products with gaps filled from supplementary data
+        """
+        if not supplementary or not primary:
+            return primary
+
+        # Build a merged supplementary dict from all probe results
+        merged_supplement: dict[str, object] = {}
+        for supp in supplementary:
+            for key, val in supp.items():
+                if key in merged_supplement:
+                    continue
+                if val is None:
+                    continue
+                if isinstance(val, str) and not val.strip():
+                    continue
+                if isinstance(val, (list, dict)) and not val:
+                    continue
+                merged_supplement[key] = val
+
+        if not merged_supplement:
+            return primary
+
+        for product in primary:
+            for key, val in merged_supplement.items():
+                existing = product.get(key)
+                if existing is None:
+                    product[key] = val
+                elif isinstance(existing, str) and not existing.strip():
+                    product[key] = val
+                elif isinstance(existing, (list, dict)) and not existing:
+                    product[key] = val
+
+        return primary
 
     def _probe_acceptable(self, products: list[dict], tier_name: str) -> bool:
         """Check if probe results are acceptable quality to commit to this tier.

@@ -66,7 +66,7 @@ class ProductNormalizer:
         """Normalize Shopify /products.json format."""
         title = raw.get("title", "").strip()
         if not title:
-            logger.warning("Shopify product missing title")
+            logger.debug("Shopify product missing title, skipping platform normalizer")
             return None
 
         # Extract first variant data
@@ -104,13 +104,20 @@ class ProductNormalizer:
         else:
             tags = list(tags_raw) if tags_raw else []
 
-        # Determine in_stock status
-        in_stock = True  # Default to True
-        for variant in variants_raw:
-            inventory_qty = variant.get("inventory_quantity")
-            if inventory_qty is not None and inventory_qty > 0:
-                in_stock = True
-                break
+        # Determine in_stock: True if ANY variant has stock > 0 or no inventory tracking
+        if variants_raw:
+            in_stock = False
+            for variant in variants_raw:
+                inventory_qty = variant.get("inventory_quantity")
+                if inventory_qty is None:
+                    # No inventory tracking — assume in stock
+                    in_stock = True
+                    break
+                if inventory_qty > 0:
+                    in_stock = True
+                    break
+        else:
+            in_stock = True  # No variants = assume in stock
 
         # Map variants
         variants = []
@@ -141,7 +148,7 @@ class ProductNormalizer:
             "description": HTMLSanitizer.sanitize(raw.get("body_html", "")),
             "price": price,
             "compare_at_price": compare_at_price,
-            "currency": "USD",  # Shopify doesn't include in product JSON
+            "currency": raw.get("_shop_currency", "USD"),
             "image_url": image_url,
             "product_url": product_url,
             "sku": first_variant.get("sku"),
@@ -304,9 +311,19 @@ class ProductNormalizer:
             logger.warning(f"Invalid Schema.org price for product {raw.get('name')}")
             price = Decimal("0")
 
-        # Extract image (can be string or list)
+        # Extract image (can be string, list, or dict ImageObject)
         image = raw.get("image", "")
-        image_url = (image[0] if image else "") if isinstance(image, list) else image
+        if isinstance(image, dict):
+            image_url = image.get("url") or image.get("contentUrl") or ""
+        elif isinstance(image, list):
+            first = image[0] if image else ""
+            image_url = (first.get("url") or first.get("contentUrl") or "") if isinstance(first, dict) else first
+        else:
+            image_url = image
+
+        # Extract availability from offers (already normalised to dict above)
+        availability = offers.get("availability", "")
+        in_stock = "InStock" in str(availability) if availability else True
 
         return {
             "external_id": raw.get("sku", raw.get("productID", "")),
@@ -320,7 +337,7 @@ class ProductNormalizer:
             "sku": raw.get("sku"),
             "vendor": raw.get("brand", {}).get("name") if isinstance(raw.get("brand"), dict) else raw.get("brand"),
             "product_type": None,
-            "in_stock": True,
+            "in_stock": in_stock,
             "variants": [],
             "tags": [],
         }
@@ -359,7 +376,13 @@ class ProductNormalizer:
 
     def _normalize_css_generic(self, raw: dict, shop_url: str) -> dict | None:
         """Normalize generic CSS-extracted fields."""
-        title = raw.get("title", "").strip()
+        title = (
+            raw.get("title")
+            or raw.get("name")
+            or raw.get("product_name")
+            or raw.get("heading")
+            or ""
+        ).strip()
         if not title:
             logger.warning("Generic product missing title")
             return None
@@ -398,9 +421,9 @@ class ProductNormalizer:
             "description": HTMLSanitizer.sanitize(raw.get("description", "")),
             "price": price,
             "compare_at_price": None,
-            "currency": "USD",
-            "image_url": raw.get("image", ""),
-            "product_url": shop_url,
+            "currency": raw.get("currency") or raw.get("price_currency") or "USD",
+            "image_url": raw.get("image") or raw.get("image_url") or raw.get("src") or "",
+            "product_url": raw.get("product_url") or raw.get("url") or raw.get("canonical") or shop_url,
             "sku": raw.get("sku"),
             "vendor": None,
             "product_type": None,

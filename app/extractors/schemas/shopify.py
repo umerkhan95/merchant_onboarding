@@ -27,5 +27,36 @@ SHOPIFY_SCHEMA = {
             "type": "attribute",
             "attribute": "src",
         },
+        {
+            "name": "vendor",
+            "selector": ".product__vendor, .product-single__vendor, [data-product-vendor]",
+            "type": "text",
+        },
+        {
+            "name": "sku",
+            "selector": ".product-single__sku, .product__sku, [data-product-sku]",
+            "type": "text",
+        },
+        {
+            "name": "in_stock",
+            "selector": ".product__availability, .product-form__inventory, [data-availability]",
+            "type": "text",
+        },
+        {
+            "name": "product_type",
+            "selector": ".product__type, [data-product-type], .breadcrumb li:last-child",
+            "type": "text",
+        },
+        {
+            "name": "product_url",
+            "selector": "link[rel='canonical']",
+            "type": "attribute",
+            "attribute": "href",
+        },
+        {
+            "name": "currency",
+            "selector": "meta[itemprop='priceCurrency'], [data-currency]",
+            "type": "text",
+        },
     ],
 }

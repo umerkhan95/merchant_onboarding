@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
-import httpx
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, LLMConfig
+from bs4 import BeautifulSoup, Comment
+from crawl4ai import AsyncWebCrawler, LLMConfig
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 from app.extractors.base import BaseExtractor
+from app.extractors.browser_config import (
+    StealthLevel,
+    get_browser_config,
+    get_crawl_config,
+    get_crawler_strategy,
+)
 
 if TYPE_CHECKING:
     from app.extractors.schema_cache import SchemaCache
@@ -19,10 +26,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SCHEMA_GENERATION_QUERY = (
-    "Extract product listing data: product title/name, price, description, "
-    "image URL, SKU, and availability/stock status. "
-    "Use stable CSS selectors (prefer class names and data attributes over nth-child)."
+    "This is a SINGLE product detail page with exactly ONE product. "
+    "The baseSelector must match the ONE main product info container. "
+    "Generate CSS selectors for exactly these fields: "
+    "title (main product heading h1/h2), price (sale or regular price text), "
+    "currency (ISO 4217 code if shown), description (product description paragraph), "
+    "image_url (main product image src attribute), sku (product SKU or ID), "
+    "in_stock (stock/availability text), vendor (brand name), "
+    "product_url (canonical link), product_type (product category). "
+    "Use class names and data attributes — never nth-child. "
+    "Do NOT target variant pickers, color swatches, review widgets, or FAQ sections."
 )
+
+TARGET_JSON_EXAMPLE = json.dumps({
+    "title": "Product Name",
+    "price": "29.99",
+    "currency": "USD",
+    "description": "Product description text",
+    "image_url": "https://example.com/product-image.jpg",
+    "sku": "SKU-001",
+    "in_stock": "true",
+    "vendor": "Brand Name",
+    "product_url": "https://example.com/products/product-name",
+    "product_type": "Headphones",
+})
 
 
 class SmartCSSExtractor(BaseExtractor):
@@ -32,61 +59,297 @@ class SmartCSSExtractor(BaseExtractor):
     Subsequent calls: loads cached schema, uses JsonCssExtractionStrategy (zero LLM cost).
     """
 
-    def __init__(self, llm_config: LLMConfig, schema_cache: SchemaCache):
+    def __init__(
+        self,
+        llm_config: LLMConfig,
+        schema_cache: SchemaCache,
+        stealth_level: StealthLevel = StealthLevel.STANDARD,
+    ):
         """Initialize SmartCSS extractor.
 
         Args:
             llm_config: crawl4ai LLMConfig for schema generation
             schema_cache: Redis-backed schema cache
+            stealth_level: Anti-bot protection tier for browser sessions
         """
         self.llm_config = llm_config
         self.cache = schema_cache
+        self.stealth_level = stealth_level
 
     async def _fetch_html(self, url: str) -> str | None:
-        """Fetch page HTML for schema generation."""
+        """Fetch page HTML for schema generation using a headless browser.
+
+        Uses AsyncWebCrawler instead of plain HTTP so we get the JS-rendered
+        DOM. This is critical for SPAs and Shopify themes that render product
+        details client-side — httpx only gets the empty shell HTML.
+        """
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.text
+            browser_config = get_browser_config(self.stealth_level, text_mode=False)
+            crawler_config = get_crawl_config(stealth_level=self.stealth_level)
+            crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
+                result = await crawler.arun(url=url, config=crawler_config)
+                if not result.success:
+                    logger.error(
+                        "Browser fetch failed for schema generation from %s: %s",
+                        url, result.error_message,
+                    )
+                    return None
+                return result.html
         except Exception as e:
             logger.error("Failed to fetch HTML for schema generation from %s: %s", url, e)
             return None
 
+    # Max HTML bytes to send to generate_schema() LLM call
+    _MAX_SCHEMA_HTML_BYTES = 150_000
+
+    @staticmethod
+    def _extract_product_region(html: str) -> str:
+        """Extract the product-relevant DOM region from full-page HTML.
+
+        Removes header, footer, nav, aside, variant pickers, reviews, media
+        galleries, and other non-product sections, then looks for a product
+        info container. Keeps only the structural DOM that generate_schema()
+        needs to produce CSS selectors for our data model fields:
+        title, price, currency, description, image_url, sku, in_stock,
+        vendor, product_url, product_type.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Remove page chrome — these never contain product data
+        for tag in soup.find_all([
+            "script", "style", "svg", "noscript", "iframe",
+            "header", "footer", "nav", "aside", "form",
+            "link", "meta",
+        ]):
+            tag.decompose()
+
+        # Remove variant pickers (Shopify custom elements and common patterns)
+        for tag in soup.find_all(["variant-radios", "variant-selects"]):
+            tag.decompose()
+
+        # Remove media galleries (huge, just need one image reference)
+        noise_selectors = [
+            "[class*='review']", "[class*='yotpo']",
+            "[class*='faq']", "[class*='accordion']",
+            "[class*='related-product']", "[class*='recommendation']",
+            "[class*='upsell']", "[class*='cross-sell']",
+            "[data-reviews]", "[data-related-products]",
+            "[class*='media-list']", "[class*='gallery']",
+            "[class*='slider']", "[class*='carousel']",
+        ]
+        for selector in noise_selectors:
+            for tag in soup.select(selector):
+                tag.decompose()
+
+        # Strip HTML comments
+        for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
+            comment.extract()
+
+        # Try to find a product info container — prefer info wrappers over
+        # full product wrappers (which include media galleries, reviews, etc.)
+        product_selectors = [
+            # Info-specific wrappers (title + price + description area)
+            ".product__info-wrapper",
+            ".product-info",
+            ".product__info",
+            ".product-detail__info",
+            ".product-single__meta",
+            # Standard product containers
+            "[data-component-type='product']",
+            ".product-detail",
+            ".product-single",
+            ".product-container",
+            "#product",
+            ".product",
+            "main",
+            "[role='main']",
+            "#main",
+            "#content",
+            ".main-content",
+        ]
+
+        for selector in product_selectors:
+            container = soup.select_one(selector)
+            if container and len(str(container)) > 200:
+                return str(container)
+
+        # Fallback: return body (already stripped of chrome)
+        body = soup.find("body")
+        return str(body) if body else str(soup)
+
+    @staticmethod
+    def _score_selector_robustness(schema: dict) -> float:
+        """Score how robust the CSS selectors are (0.0-1.0).
+
+        attribute-based ([data-*], [itemprop]) = 1.0
+        class-based (.product-title) = 0.8
+        tag-based (h1, span) = 0.5
+        nth-child = 0.2
+        """
+        scores = []
+        for field_def in schema.get("fields", []):
+            selector = field_def.get("selector", "")
+            if re.search(r':nth-child\(\d+\)', selector):
+                scores.append(0.2)
+            elif re.search(r'\[[\w-]+', selector):  # attribute selector
+                scores.append(1.0)
+            elif '.' in selector:  # class selector
+                scores.append(0.8)
+            else:
+                scores.append(0.5)
+
+        # Also check baseSelector
+        base = schema.get("baseSelector", "")
+        if re.search(r':nth-child\(\d+\)', base):
+            scores.append(0.2)
+        elif re.search(r'\[[\w-]+', base):
+            scores.append(1.0)
+        elif '.' in base:
+            scores.append(0.8)
+        else:
+            scores.append(0.5)
+
+        return sum(scores) / len(scores) if scores else 0.0
+
+    async def _validate_schema(self, schema: dict, sample_htmls: list[str]) -> bool:
+        """Validate that a generated schema extracts products from all sample pages.
+
+        Returns True if the schema extracts at least 1 product from each sample.
+        """
+        for html in sample_htmls:
+            try:
+                # Use BeautifulSoup to apply CSS selectors directly
+                soup = BeautifulSoup(html, "html.parser")
+                base_selector = schema.get("baseSelector", "")
+                if not base_selector:
+                    return False
+
+                # Try to find at least one element matching the base selector
+                containers = soup.select(base_selector)
+                if not containers:
+                    logger.warning("Schema validation failed: baseSelector '%s' matched 0 elements", base_selector)
+                    return False
+
+                # Check if at least one field can be extracted
+                fields = schema.get("fields", [])
+                if not fields:
+                    return False
+
+                found_data = False
+                for container in containers[:1]:  # Check first match only
+                    for field_def in fields:
+                        field_selector = field_def.get("selector", "")
+                        if not field_selector:
+                            continue
+                        elements = container.select(field_selector)
+                        if elements and elements[0].get_text(strip=True):
+                            found_data = True
+                            break
+                    if found_data:
+                        break
+
+                if not found_data:
+                    logger.warning("Schema validation failed: no field data extracted from sample")
+                    return False
+
+            except Exception as e:
+                logger.warning("Schema validation error: %s", e)
+                return False
+
+        logger.info("Schema validation passed: extracts data from all %d samples", len(sample_htmls))
+        return True
+
     async def _generate_schema(self, html: str) -> dict | None:
         """Generate CSS extraction schema from sample HTML using LLM."""
         try:
+            html = self._extract_product_region(html)
+            if len(html) > self._MAX_SCHEMA_HTML_BYTES:
+                html = html[: self._MAX_SCHEMA_HTML_BYTES]
+                # Avoid cutting mid-tag — find last '>' before the limit
+                last_close = html.rfind(">")
+                if last_close > 0:
+                    html = html[: last_close + 1]
+            logger.info(
+                "HTML reduced to %d bytes for schema generation",
+                len(html),
+            )
             schema = JsonCssExtractionStrategy.generate_schema(
                 html=html,
                 schema_type="CSS",
                 query=SCHEMA_GENERATION_QUERY,
+                target_json_example=TARGET_JSON_EXAMPLE,
                 llm_config=self.llm_config,
             )
             if not schema or not schema.get("baseSelector") or not schema.get("fields"):
                 logger.warning("LLM generated invalid schema (missing baseSelector or fields)")
                 return None
-            logger.info("Generated CSS schema with baseSelector='%s' and %d fields",
-                        schema.get("baseSelector"), len(schema.get("fields", [])))
+
+            # Check selector robustness
+            robustness_score = self._score_selector_robustness(schema)
+            logger.info("Generated CSS schema with baseSelector='%s', %d fields, robustness=%.2f",
+                        schema.get("baseSelector"), len(schema.get("fields", [])), robustness_score)
+
+            if robustness_score < 0.3:
+                logger.warning("Generated schema has very low robustness score (%.2f) — selectors are too brittle",
+                              robustness_score)
+                return None
+
+            if robustness_score < 0.5:
+                logger.info("Generated schema has moderate robustness score (%.2f) — proceeding with caution",
+                            robustness_score)
+
             return schema
         except Exception as e:
             logger.error("Schema generation failed: %s", e)
             return None
 
-    async def _get_or_generate_schema(self, url: str) -> dict | None:
-        """Get cached schema or generate a new one."""
+    async def _get_or_generate_schema(self, url: str, sample_urls: list[str] | None = None) -> dict | None:
+        """Get cached schema or generate a new one.
+
+        Args:
+            url: Primary URL to generate schema from
+            sample_urls: Optional list of additional product URLs for multi-sample validation
+
+        Returns:
+            Generated and validated CSS schema, or None if generation/validation fails
+        """
         # Try cache first
         schema = await self.cache.get(url)
         if schema:
             return schema
 
-        # Generate from HTML
+        # Fetch HTML from primary URL
         html = await self._fetch_html(url)
         if not html:
             return None
 
+        # Generate schema from primary HTML
         schema = await self._generate_schema(html)
         if not schema:
             return None
+
+        # Multi-sample validation if sample URLs provided
+        if sample_urls and len(sample_urls) > 1:
+            logger.info("Validating schema against %d sample URLs", len(sample_urls))
+            sample_htmls = [html]  # Include primary HTML
+
+            # Fetch additional samples (skip first URL since it's the primary)
+            for sample_url in sample_urls[1:]:
+                sample_html = await self._fetch_html(sample_url)
+                if sample_html:
+                    sample_htmls.append(sample_html)
+
+            # Validate schema works on all samples
+            if len(sample_htmls) > 1:
+                is_valid = await self._validate_schema(schema, sample_htmls)
+                if not is_valid:
+                    logger.warning("Schema failed multi-sample validation, rejecting")
+                    return None
+                logger.info("Schema passed multi-sample validation with %d samples", len(sample_htmls))
 
         # Cache for reuse
         await self.cache.set(url, schema)
@@ -106,17 +369,18 @@ class SmartCSSExtractor(BaseExtractor):
             return []
 
         try:
-            browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
+            browser_config = get_browser_config(self.stealth_level)
             extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
-            crawler_config = CrawlerRunConfig(
+            crawler_config = get_crawl_config(
+                stealth_level=self.stealth_level,
                 extraction_strategy=extraction_strategy,
-                cache_mode="bypass",
-                wait_until="domcontentloaded",
-                page_timeout=30000,
-                delay_before_return_html=2.0,
             )
 
-            async with AsyncWebCrawler(config=browser_config) as crawler:
+            crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
                 result = await crawler.arun(url=url, config=crawler_config)
 
                 if not result.success:
@@ -164,19 +428,17 @@ class SmartCSSExtractor(BaseExtractor):
         if not urls:
             return []
 
-        # Get or generate schema from first URL
-        schema = await self._get_or_generate_schema(urls[0])
+        # Get or generate schema from first URL with multi-sample validation
+        sample_urls = urls[:3] if len(urls) >= 3 else urls
+        schema = await self._get_or_generate_schema(urls[0], sample_urls=sample_urls)
         if not schema:
             return []
 
-        browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
+        browser_config = get_browser_config(self.stealth_level)
         extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
-        crawler_config = CrawlerRunConfig(
+        crawler_config = get_crawl_config(
+            stealth_level=self.stealth_level,
             extraction_strategy=extraction_strategy,
-            cache_mode="bypass",
-            wait_until="domcontentloaded",
-            page_timeout=30000,
-            delay_before_return_html=2.0,
         )
         dispatcher = MemoryAdaptiveDispatcher(
             max_session_permit=5,
@@ -185,7 +447,11 @@ class SmartCSSExtractor(BaseExtractor):
 
         all_products = []
         try:
-            async with AsyncWebCrawler(config=browser_config) as crawler:
+            crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
                 results = await crawler.arun_many(
                     urls=urls,
                     config=crawler_config,

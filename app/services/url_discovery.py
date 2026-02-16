@@ -1,6 +1,7 @@
 """URL discovery service for e-commerce platforms.
 
 Uses crawl4ai for browser-based link discovery when API and sitemap strategies fail.
+BestFirstCrawlingStrategy prioritizes product-like URLs via keyword scoring.
 """
 
 from __future__ import annotations
@@ -9,9 +10,16 @@ import logging
 from urllib.parse import urlparse
 
 import httpx
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
-from crawl4ai.deep_crawling import BFSDeepCrawlStrategy, FilterChain, DomainFilter, URLPatternFilter
+from crawl4ai import AsyncWebCrawler
+from crawl4ai.deep_crawling import BestFirstCrawlingStrategy, FilterChain, DomainFilter, URLPatternFilter
+from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
 
+from app.extractors.browser_config import (
+    StealthLevel,
+    get_browser_config,
+    get_crawl_config,
+    get_crawler_strategy,
+)
 from app.models.enums import Platform
 from app.services.sitemap_parser import SitemapParser
 
@@ -32,6 +40,12 @@ NON_PRODUCT_SEGMENTS = {
     "blog", "faq", "help", "support", "careers", "press",
 }
 
+# Keywords that indicate product-relevant pages (used by BestFirst scorer)
+PRODUCT_KEYWORDS = [
+    "product", "price", "buy", "shop", "item", "cart", "add-to-cart",
+    "sku", "inventory", "catalog", "collection",
+]
+
 
 class URLDiscoveryService:
     """Discover product URLs based on e-commerce platform.
@@ -39,8 +53,9 @@ class URLDiscoveryService:
     Strategy chain: Platform API → Sitemap → crawl4ai browser crawl.
     """
 
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 30.0, stealth_level: StealthLevel = StealthLevel.STANDARD):
         self.timeout = timeout
+        self.stealth_level = stealth_level
         self.sitemap_parser = SitemapParser(timeout=timeout)
 
     async def discover(self, base_url: str, platform: Platform) -> list[str]:
@@ -188,11 +203,18 @@ class URLDiscoveryService:
 
     # ── crawl4ai browser-based discovery ──────────────────────────────
 
-    async def _discover_via_crawl4ai(self, base_url: str) -> list[str]:
-        """Use crawl4ai BFSDeepCrawlStrategy to discover product URLs.
+    async def _discover_via_crawl4ai(
+        self, base_url: str, max_pages: int = 100
+    ) -> list[str]:
+        """Use crawl4ai BestFirstCrawlingStrategy to discover product URLs.
 
-        Performs a breadth-first crawl up to depth 2, filtering out non-product
-        pages via domain and URL pattern filters.
+        Prioritizes product-like URLs via keyword scoring, filters out
+        non-product pages, and crawls up to max_pages. BestFirst uses a
+        priority queue so the most product-relevant URLs are visited first.
+
+        Args:
+            base_url: Shop base URL to start crawling from.
+            max_pages: Maximum pages to visit (default 100).
         """
         parsed = urlparse(base_url)
         domain = parsed.netloc
@@ -211,32 +233,40 @@ class URLDiscoveryService:
             ),
         ])
 
-        strategy = BFSDeepCrawlStrategy(
-            max_depth=2,
-            max_pages=50,
+        scorer = KeywordRelevanceScorer(
+            keywords=PRODUCT_KEYWORDS,
+            weight=0.7,
+        )
+
+        strategy = BestFirstCrawlingStrategy(
+            max_depth=3,
+            max_pages=max_pages,
             filter_chain=filter_chain,
+            url_scorer=scorer,
             include_external=False,
         )
 
-        browser_config = BrowserConfig(headless=True, verbose=False, text_mode=True)
-        crawl_config = CrawlerRunConfig(
+        browser_config = get_browser_config(self.stealth_level)
+        crawl_config = get_crawl_config(
+            stealth_level=self.stealth_level,
             deep_crawl_strategy=strategy,
-            cache_mode="bypass",
             wait_until="domcontentloaded",
-            page_timeout=30000,
-            delay_before_return_html=2.0,
+            wait_for=None,
         )
 
         found_urls: set[str] = set()
         try:
-            async with AsyncWebCrawler(config=browser_config) as crawler:
+            crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
                 results = await crawler.arun(url=base_url, config=crawl_config)
                 # Deep crawl returns a list of CrawlResult
                 if isinstance(results, list):
                     for result in results:
                         if result.success:
                             url = result.url
-                            # Additional filtering: skip non-product paths
                             url_parsed = urlparse(url)
                             path = url_parsed.path.rstrip("/")
                             if path in NON_PRODUCT_PATHS:
@@ -251,6 +281,9 @@ class URLDiscoveryService:
             logger.error("Deep crawl discovery failed for %s: %s", base_url, e)
 
         if found_urls:
-            logger.info("Deep crawl discovered %d candidate product URLs", len(found_urls))
+            logger.info(
+                "BestFirst crawl discovered %d candidate product URLs from %s",
+                len(found_urls), base_url,
+            )
 
         return list(found_urls)

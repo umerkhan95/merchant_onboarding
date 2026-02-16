@@ -198,6 +198,160 @@ class TestShopifyNormalization:
 
         assert product is None
 
+    def test_normalize_shopify_all_variants_out_of_stock(self, normalizer):
+        """Product should be out of stock if all variants have inventory_quantity=0."""
+        raw = {
+            "id": 999,
+            "title": "Out of Stock Product",
+            "handle": "out-of-stock",
+            "variants": [
+                {
+                    "id": 1,
+                    "title": "Size S",
+                    "price": "19.99",
+                    "inventory_quantity": 0,
+                },
+                {
+                    "id": 2,
+                    "title": "Size M",
+                    "price": "19.99",
+                    "inventory_quantity": 0,
+                },
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://test.com",
+        )
+
+        assert product.in_stock is False
+
+    def test_normalize_shopify_mixed_stock_variants(self, normalizer):
+        """Product should be in stock if ANY variant has inventory > 0."""
+        raw = {
+            "id": 888,
+            "title": "Mixed Stock Product",
+            "handle": "mixed-stock",
+            "variants": [
+                {
+                    "id": 1,
+                    "title": "Size S",
+                    "price": "19.99",
+                    "inventory_quantity": 0,
+                },
+                {
+                    "id": 2,
+                    "title": "Size M",
+                    "price": "19.99",
+                    "inventory_quantity": 5,
+                },
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://test.com",
+        )
+
+        assert product.in_stock is True
+
+    def test_normalize_shopify_no_inventory_tracking(self, normalizer):
+        """Product should be in stock if variants have no inventory_quantity field."""
+        raw = {
+            "id": 777,
+            "title": "No Tracking Product",
+            "handle": "no-tracking",
+            "variants": [
+                {
+                    "id": 1,
+                    "title": "Default",
+                    "price": "19.99",
+                    # No inventory_quantity field
+                },
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://test.com",
+        )
+
+        assert product.in_stock is True
+
+    def test_normalize_shopify_no_variants(self, normalizer):
+        """Product with no variants should default to in stock."""
+        raw = {
+            "id": 666,
+            "title": "No Variants Product",
+            "handle": "no-variants",
+            "variants": [],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://test.com",
+        )
+
+        assert product.in_stock is True
+
+    def test_normalize_shopify_uses_shop_currency(self, normalizer):
+        """Should use _shop_currency from raw data if present."""
+        raw = {
+            "id": 555,
+            "title": "Currency Test Product",
+            "handle": "currency-test",
+            "variants": [
+                {
+                    "id": 1,
+                    "title": "Default",
+                    "price": "29.99",
+                },
+            ],
+            "_shop_currency": "EUR",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://test.com",
+        )
+
+        assert product.currency == "EUR"
+
+    def test_normalize_shopify_defaults_to_usd_without_shop_currency(self, normalizer):
+        """Should default to USD if _shop_currency not present."""
+        raw = {
+            "id": 444,
+            "title": "Default Currency Product",
+            "handle": "default-currency",
+            "variants": [
+                {
+                    "id": 1,
+                    "title": "Default",
+                    "price": "29.99",
+                },
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://test.com",
+        )
+
+        assert product.currency == "USD"
+
 
 class TestWooCommerceNormalization:
     """Test WooCommerce product normalization."""
@@ -463,6 +617,141 @@ class TestSchemaOrgNormalization:
 
         assert product.image_url == "https://example.com/image1.jpg"
 
+    def test_normalize_schema_org_image_dict(self, normalizer):
+        """Handle image as dict (ImageObject with url)."""
+        raw = {
+            "name": "ImageObject Product",
+            "image": {"@type": "ImageObject", "url": "https://example.com/dict-image.jpg"},
+            "offers": {"price": "10.00"},
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.image_url == "https://example.com/dict-image.jpg"
+
+    def test_normalize_schema_org_image_dict_content_url(self, normalizer):
+        """Handle image as dict (ImageObject with contentUrl)."""
+        raw = {
+            "name": "ContentUrl Product",
+            "image": {"@type": "ImageObject", "contentUrl": "https://example.com/content-image.jpg"},
+            "offers": {"price": "10.00"},
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.image_url == "https://example.com/content-image.jpg"
+
+    def test_normalize_schema_org_image_array_of_dicts(self, normalizer):
+        """Handle image as array of ImageObject dicts."""
+        raw = {
+            "name": "Array Dict Image Product",
+            "image": [
+                {"@type": "ImageObject", "url": "https://example.com/first.jpg"},
+                {"@type": "ImageObject", "url": "https://example.com/second.jpg"},
+            ],
+            "offers": {"price": "10.00"},
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.image_url == "https://example.com/first.jpg"
+
+    def test_normalize_schema_org_in_stock_from_availability(self, normalizer):
+        """Extract in_stock from Schema.org availability field."""
+        raw = {
+            "name": "In Stock Product",
+            "offers": {
+                "price": "49.99",
+                "priceCurrency": "USD",
+                "availability": "https://schema.org/InStock",
+            },
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.in_stock is True
+
+    def test_normalize_schema_org_out_of_stock_from_availability(self, normalizer):
+        """Extract out of stock from Schema.org availability field."""
+        raw = {
+            "name": "Out of Stock Product",
+            "offers": {
+                "price": "49.99",
+                "priceCurrency": "USD",
+                "availability": "https://schema.org/OutOfStock",
+            },
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.in_stock is False
+
+    def test_normalize_schema_org_defaults_in_stock_without_availability(self, normalizer):
+        """Default to in stock if no availability field."""
+        raw = {
+            "name": "No Availability Product",
+            "offers": {
+                "price": "49.99",
+                "priceCurrency": "USD",
+            },
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.in_stock is True
+
+    def test_normalize_schema_org_availability_array_format(self, normalizer):
+        """Handle offers as array with availability."""
+        raw = {
+            "name": "Array Offers Product",
+            "offers": [
+                {
+                    "price": "49.99",
+                    "priceCurrency": "USD",
+                    "availability": "https://schema.org/InStock",
+                },
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.in_stock is True
+
 
 class TestOpenGraphNormalization:
     """Test OpenGraph meta tags normalization."""
@@ -569,6 +858,101 @@ class TestGenericCSSNormalization:
         )
 
         assert product.price == Decimal("0")
+
+    def test_normalize_generic_css_field_aliases(self, normalizer):
+        """Generic CSS should recognize title aliases."""
+        test_cases = [
+            {"name": "Product Name", "price": "29.99"},
+            {"product_name": "Product Name", "price": "29.99"},
+            {"heading": "Product Name", "price": "29.99"},
+        ]
+
+        for raw in test_cases:
+            product = normalizer.normalize(
+                raw=raw,
+                shop_id="test",
+                platform=Platform.GENERIC,
+                shop_url="https://example.com",
+            )
+            assert product is not None
+            assert product.title == "Product Name"
+
+    def test_normalize_generic_css_image_aliases(self, normalizer):
+        """Generic CSS should recognize image field aliases."""
+        test_cases = [
+            {"title": "Test", "image": "https://example.com/img1.jpg"},
+            {"title": "Test", "image_url": "https://example.com/img2.jpg"},
+            {"title": "Test", "src": "https://example.com/img3.jpg"},
+        ]
+
+        expected_urls = [
+            "https://example.com/img1.jpg",
+            "https://example.com/img2.jpg",
+            "https://example.com/img3.jpg",
+        ]
+
+        for raw, expected_url in zip(test_cases, expected_urls):
+            product = normalizer.normalize(
+                raw=raw,
+                shop_id="test",
+                platform=Platform.GENERIC,
+                shop_url="https://example.com",
+            )
+            assert product.image_url == expected_url
+
+    def test_normalize_generic_css_url_aliases(self, normalizer):
+        """Generic CSS should recognize product_url aliases."""
+        test_cases = [
+            {"title": "Test", "product_url": "https://example.com/product1"},
+            {"title": "Test", "url": "https://example.com/product2"},
+            {"title": "Test", "canonical": "https://example.com/product3"},
+        ]
+
+        expected_urls = [
+            "https://example.com/product1",
+            "https://example.com/product2",
+            "https://example.com/product3",
+        ]
+
+        for raw, expected_url in zip(test_cases, expected_urls):
+            product = normalizer.normalize(
+                raw=raw,
+                shop_id="test",
+                platform=Platform.GENERIC,
+                shop_url="https://example.com",
+            )
+            assert product.product_url == expected_url
+
+    def test_normalize_generic_css_fallback_to_shop_url(self, normalizer):
+        """Generic CSS should fall back to shop_url if no product_url."""
+        raw = {"title": "Test", "price": "29.99"}
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.product_url == "https://example.com"
+
+    def test_normalize_generic_css_field_priority(self, normalizer):
+        """Generic CSS should prioritize first available field."""
+        raw = {
+            "title": "Title Field",
+            "name": "Name Field",
+            "product_name": "Product Name Field",
+            "price": "29.99",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product.title == "Title Field"  # title takes priority
 
 
 class TestEdgeCases:

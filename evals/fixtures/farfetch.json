@@ -9,21 +9,24 @@
       "price": "2450.00",
       "currency": "USD",
       "vendor": "Gucci",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.farfetch.com/shopping/women/gucci-small-gg-marmont-shoulder-bag-item-12964936.aspx"
     },
     {
       "title": "Prada Re-Nylon triangle-logo baseball cap",
       "price": "595.00",
       "currency": "USD",
       "vendor": "Prada",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.farfetch.com/shopping/men/prada-re-nylon-baseball-cap-item-16433005.aspx"
     },
     {
       "title": "Balenciaga Track sneakers",
       "price": "1050.00",
       "currency": "USD",
       "vendor": "Balenciaga",
-      "in_stock": true
+      "in_stock": true,
+      "product_url": "https://www.farfetch.com/shopping/men/balenciaga-track-sneakers-item-14254053.aspx"
     }
   ]
 }

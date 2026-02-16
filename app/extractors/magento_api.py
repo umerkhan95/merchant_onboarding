@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from app.extractors.base import BaseExtractor
+from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,13 @@ class MagentoAPIExtractor(BaseExtractor):
         base_url = shop_url.rstrip("/")
         current_page = 1
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        headers = {
+            **DEFAULT_HEADERS,
+            "User-Agent": get_default_user_agent(),
+            "Accept": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             while True:
                 url = (
                     f"{base_url}/rest/V1/products?"

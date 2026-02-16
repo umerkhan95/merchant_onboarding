@@ -14,7 +14,19 @@ logger = logging.getLogger(__name__)
 SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # Default URL patterns to filter for product pages
-DEFAULT_PRODUCT_PATTERNS = ["/product", "/products/", "/shop/", "/p/"]
+DEFAULT_PRODUCT_PATTERNS = [
+    "/product",
+    "/products/",
+    "/shop/",
+    "/p/",
+    "/item/",
+    "/items/",
+    "/dp/",
+    "/catalog/product",
+    "-p-",
+    "/goods/",
+    "/buy/",
+]
 
 
 @dataclass

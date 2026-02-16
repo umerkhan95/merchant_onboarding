@@ -243,3 +243,124 @@ class TestLLMExtractor:
         assert len(result) == 2
         assert result[0]["title"] == "Valid"
         assert result[1]["title"] == "Also Valid"
+
+    def test_markdown_generator_no_pruning_filter(self, extractor):
+        """Test that markdown generator does NOT use PruningContentFilter.
+
+        PruningContentFilter aggressively strips product content, producing
+        empty fit_markdown on most e-commerce sites. Regular markdown with
+        chunking is more reliable for LLM extraction.
+        """
+        markdown_gen = extractor._create_markdown_generator()
+        assert markdown_gen.content_filter is None
+
+
+class TestMergeChunkProducts:
+    """Tests for _merge_chunk_products — merging partial products from chunks."""
+
+    def test_single_product_unchanged(self):
+        """Single product list passes through unchanged."""
+        products = [{"title": "Shoes", "price": "$100"}]
+        result = LLMExtractor._merge_chunk_products(products)
+        assert result == products
+
+    def test_empty_list(self):
+        """Empty list returns empty."""
+        assert LLMExtractor._merge_chunk_products([]) == []
+
+    def test_merges_exact_title_match(self):
+        """Products with identical titles are merged."""
+        products = [
+            {"title": "Men's Tree Runners", "price": "$100"},
+            {"title": "Men's Tree Runners", "description": "Lightweight shoes", "image_url": "https://img.jpg"},
+        ]
+        result = LLMExtractor._merge_chunk_products(products)
+        assert len(result) == 1
+        assert result[0]["title"] == "Men's Tree Runners"
+        assert result[0]["price"] == "$100"
+        assert result[0]["description"] == "Lightweight shoes"
+        assert result[0]["image_url"] == "https://img.jpg"
+
+    def test_merges_prefix_titles(self):
+        """Product with title that is a prefix of another gets merged."""
+        products = [
+            {"title": "Men's Tree Runners", "price": "$100"},
+            {"title": "Men's Tree Runners - Allbirds Edition", "vendor": "Allbirds"},
+        ]
+        result = LLMExtractor._merge_chunk_products(products)
+        assert len(result) == 1
+        assert result[0]["price"] == "$100"
+        assert result[0]["vendor"] == "Allbirds"
+
+    def test_merges_similar_titles(self):
+        """Products with >0.7 SequenceMatcher ratio are merged."""
+        products = [
+            {"title": "Men's Tree Runners", "price": "$100"},
+            {"title": "Mens Tree Runner", "currency": "USD"},
+        ]
+        result = LLMExtractor._merge_chunk_products(products)
+        assert len(result) == 1
+        assert result[0]["price"] == "$100"
+        assert result[0]["currency"] == "USD"
+
+    def test_does_not_merge_different_products(self):
+        """Products with different titles stay separate."""
+        products = [
+            {"title": "Men's Tree Runners", "price": "$100"},
+            {"title": "Women's Wool Loungers", "price": "$120"},
+        ]
+        result = LLMExtractor._merge_chunk_products(products)
+        assert len(result) == 2
+
+    def test_first_value_wins(self):
+        """When both chunks have a field, the first value is kept."""
+        products = [
+            {"title": "Shoes", "price": "$100", "vendor": "Allbirds"},
+            {"title": "Shoes", "price": "$95", "vendor": ""},
+        ]
+        result = LLMExtractor._merge_chunk_products(products)
+        assert len(result) == 1
+        assert result[0]["price"] == "$100"
+        assert result[0]["vendor"] == "Allbirds"
+
+    def test_merges_three_chunks(self):
+        """Three chunks of the same product merge into one."""
+        products = [
+            {"title": "Headphones", "price": "$299"},
+            {"title": "Headphones", "description": "Noise cancelling"},
+            {"title": "Headphones", "vendor": "Sony", "in_stock": True},
+        ]
+        result = LLMExtractor._merge_chunk_products(products)
+        assert len(result) == 1
+        assert result[0]["price"] == "$299"
+        assert result[0]["description"] == "Noise cancelling"
+        assert result[0]["vendor"] == "Sony"
+        assert result[0]["in_stock"] is True
+
+    async def test_extract_merges_chunk_duplicates(self, extractor):
+        """Full extract() call merges chunk duplicates."""
+        # Simulate chunking producing 3 partial products from one page
+        chunk_products = [
+            {"title": "Test Product", "price": "$50"},
+            {"title": "Test Product", "description": "Great product", "vendor": "TestBrand"},
+            {"title": "Test Product", "image_url": "https://img.jpg"},
+        ]
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.extracted_content = json.dumps(chunk_products)
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun.return_value = mock_result
+        mock_crawler.__aenter__.return_value = mock_crawler
+        mock_crawler.__aexit__.return_value = None
+
+        with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
+            result = await extractor.extract("https://example.com/product")
+
+        assert len(result) == 1
+        assert result[0]["title"] == "Test Product"
+        assert result[0]["price"] == "$50"
+        assert result[0]["description"] == "Great product"
+        assert result[0]["vendor"] == "TestBrand"
+        assert result[0]["image_url"] == "https://img.jpg"

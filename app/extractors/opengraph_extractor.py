@@ -8,6 +8,11 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.extractors.base import BaseExtractor
+from app.extractors.browser_config import (
+    DEFAULT_HEADERS,
+    get_default_user_agent,
+    fetch_html_with_browser,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,9 @@ class OpenGraphExtractor(BaseExtractor):
     async def extract(self, url: str) -> list[dict]:
         """Extract OpenGraph meta tags from page.
 
+        Tries httpx first (fast). Falls back to browser on HTTP errors (403, timeout)
+        which indicate bot protection or JS-rendered content.
+
         Args:
             url: Product page URL
 
@@ -66,7 +74,8 @@ class OpenGraphExtractor(BaseExtractor):
             List with single dict of extracted OG data. Empty list on error.
         """
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            headers = {**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()}
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0, headers=headers) as client:
                 response = await client.get(url)
                 response.raise_for_status()
                 html = response.text
@@ -74,7 +83,13 @@ class OpenGraphExtractor(BaseExtractor):
             return self.extract_from_html(html, url)
 
         except httpx.HTTPStatusError as e:
-            logger.error("HTTP error fetching %s: %s", url, e)
+            if e.response.status_code in (403, 429, 503):
+                logger.warning("OpenGraph blocked (%d) for %s, trying browser fallback", e.response.status_code, url)
+                html = await fetch_html_with_browser(url)
+                if html:
+                    return self.extract_from_html(html, url)
+            else:
+                logger.error("HTTP %d fetching %s", e.response.status_code, url)
             return []
         except httpx.RequestError as e:
             logger.error("Request error fetching %s: %s", url, e)

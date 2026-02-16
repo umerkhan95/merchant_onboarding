@@ -122,6 +122,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--stealth",
+        choices=["standard", "stealth", "undetected"],
+        default="standard",
+        help="Anti-bot stealth level: standard (default), stealth (fingerprint spoofing), undetected (deep patches)",
+    )
+
+    parser.add_argument(
         "--mode",
         choices=["tier", "pipeline"],
         default="tier",
@@ -263,11 +270,15 @@ async def main() -> int:
             else:
                 tiers = None  # Use default
 
+            from app.extractors.browser_config import StealthLevel
+            stealth_level = StealthLevel(args.stealth)
+
             runner = EvalRunner(
                 tiers=tiers,
                 profile=args.profile,
                 force_offline=args.offline,
                 force_live=args.live,
+                stealth_level=stealth_level,
             )
             logger.info("Running in TIER mode (individual extractors)")
 

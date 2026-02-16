@@ -171,6 +171,22 @@ class TestBooleanScoring:
         score = Scorer._boolean_score("in_stock", "available")
         assert score == 1.0
 
+    def test_instock_without_underscore(self):
+        # Schema.org and OpenGraph often use "instock" (no underscore)
+        score = Scorer._boolean_score("true", "instock")
+        assert score == 1.0
+
+    def test_in_stock_with_space(self):
+        score = Scorer._boolean_score("true", "in stock")
+        assert score == 1.0
+
+    def test_instock_variations(self):
+        # Test all variations of instock
+        variations = ["instock", "InStock", "in_stock", "in stock"]
+        for val in variations:
+            score = Scorer._boolean_score("true", val)
+            assert score == 1.0, f"Failed for '{val}'"
+
 
 class TestURLScoring:
     """Test URL comparison with normalization."""
@@ -213,9 +229,9 @@ class TestURLScoring:
     def test_url_trailing_slash(self):
         expected = "https://example.com/product"
         extracted = "https://example.com/product/"
-        # URLs with/without trailing slash are different paths
+        # URLs with/without trailing slash should be treated as equal after normalization
         score = Scorer._url_score(expected, extracted)
-        assert score == 0.0
+        assert score == 1.0
 
 
 class TestFieldScoring:

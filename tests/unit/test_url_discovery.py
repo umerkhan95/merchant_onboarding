@@ -433,7 +433,7 @@ class TestURLDiscoveryService:
         assert urls1 == urls2
 
     async def test_deep_crawl_discovers_product_urls(self, monkeypatch):
-        """Test that BFS deep crawl discovers product URLs and filters non-product pages."""
+        """Test that BestFirst deep crawl discovers product URLs and filters non-product pages."""
         service = URLDiscoveryService()
 
         # Fake crawl results (deep crawl returns a list of CrawlResult)
@@ -528,3 +528,97 @@ class TestURLDiscoveryService:
         # Should deduplicate
         assert len(urls) == 2
         assert urls.count("https://example.com/products/item1") == 1
+
+    async def test_deep_crawl_uses_bestfirst_strategy(self, monkeypatch):
+        """Test that _discover_via_crawl4ai uses BestFirstCrawlingStrategy with keyword scorer."""
+        from crawl4ai.deep_crawling import BestFirstCrawlingStrategy
+        from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
+
+        captured_strategy = {}
+
+        class FakeCrawler:
+            async def arun(self, url, config=None):
+                # Capture the strategy from the config
+                if config and hasattr(config, "deep_crawl_strategy"):
+                    captured_strategy["strategy"] = config.deep_crawl_strategy
+                return []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.url_discovery.AsyncWebCrawler",
+            lambda config=None, **kwargs: FakeCrawler(),
+        )
+
+        service = URLDiscoveryService()
+        await service._discover_via_crawl4ai("https://shop.example.com")
+
+        assert "strategy" in captured_strategy
+        strategy = captured_strategy["strategy"]
+        assert isinstance(strategy, BestFirstCrawlingStrategy)
+        assert strategy.max_pages == 100
+        assert strategy.max_depth == 3
+        assert strategy.url_scorer is not None
+        assert isinstance(strategy.url_scorer, KeywordRelevanceScorer)
+
+    async def test_deep_crawl_respects_max_pages_param(self, monkeypatch):
+        """Test that max_pages parameter is passed through to BestFirstCrawlingStrategy."""
+        captured_strategy = {}
+
+        class FakeCrawler:
+            async def arun(self, url, config=None):
+                if config and hasattr(config, "deep_crawl_strategy"):
+                    captured_strategy["strategy"] = config.deep_crawl_strategy
+                return []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.url_discovery.AsyncWebCrawler",
+            lambda config=None, **kwargs: FakeCrawler(),
+        )
+
+        service = URLDiscoveryService()
+        await service._discover_via_crawl4ai("https://shop.example.com", max_pages=200)
+
+        assert captured_strategy["strategy"].max_pages == 200
+
+    async def test_deep_crawl_handles_exception(self, monkeypatch):
+        """Test that _discover_via_crawl4ai returns empty list on crawler exception."""
+
+        class FailingCrawler:
+            async def arun(self, url, config=None):
+                raise RuntimeError("Browser crashed")
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.url_discovery.AsyncWebCrawler",
+            lambda config=None, **kwargs: FailingCrawler(),
+        )
+
+        service = URLDiscoveryService()
+        urls = await service._discover_via_crawl4ai("https://shop.example.com")
+        assert urls == []
+
+    def test_product_keywords_constant(self):
+        """Test that PRODUCT_KEYWORDS contains expected keywords for scorer."""
+        from app.services.url_discovery import PRODUCT_KEYWORDS
+
+        assert "product" in PRODUCT_KEYWORDS
+        assert "price" in PRODUCT_KEYWORDS
+        assert "buy" in PRODUCT_KEYWORDS
+        assert "shop" in PRODUCT_KEYWORDS
+        assert len(PRODUCT_KEYWORDS) >= 8

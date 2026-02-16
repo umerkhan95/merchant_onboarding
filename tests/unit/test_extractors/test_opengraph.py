@@ -267,3 +267,30 @@ class TestOpenGraphExtractor:
         assert og_data["og:title"] == "Complete Product"
         assert og_data["og:type"] == "product"
         assert og_data["product:condition"] == "new"
+
+    @pytest.mark.respx(base_url="https://example.com")
+    async def test_headers_sent(self, extractor, respx_mock):
+        """Test that User-Agent and Accept-Language headers are sent."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta property="og:title" content="Header Test Product">
+        </head>
+        <body></body>
+        </html>
+        """
+
+        route = respx_mock.get("/headers-test").mock(return_value=Response(200, text=html))
+
+        result = await extractor.extract("https://example.com/headers-test")
+
+        assert len(result) == 1
+        assert route.called
+
+        # Verify headers were sent
+        request = route.calls.last.request
+        assert "User-Agent" in request.headers
+        assert "Mozilla" in request.headers["User-Agent"]
+        assert "Accept-Language" in request.headers
+        assert "en-US" in request.headers["Accept-Language"]

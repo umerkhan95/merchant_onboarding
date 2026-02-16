@@ -10,6 +10,7 @@ import pytest
 import respx
 from httpx import Response
 
+from app.extractors.browser_config import _USER_AGENTS
 from app.extractors.woocommerce_api import WooCommerceAPIExtractor
 
 
@@ -303,6 +304,26 @@ async def test_trailing_slash_handling(extractor: WooCommerceAPIExtractor, wooco
         products = await extractor.extract(shop_url_with_slash)
 
         assert len(products) == 2
+
+
+@pytest.mark.asyncio
+async def test_uses_shared_browser_config_headers(extractor: WooCommerceAPIExtractor, woocommerce_products_fixture: list[dict]):
+    """Verify WooCommerce extractor uses centralized User-Agent from browser_config."""
+    shop_url = "https://shop.example.com"
+
+    with respx.mock:
+        route = respx.get(f"{shop_url}/wp-json/wc/store/v1/products?per_page=100&page=1").mock(
+            return_value=Response(200, json=woocommerce_products_fixture)
+        )
+
+        await extractor.extract(shop_url)
+
+        # Verify the request used a User-Agent from the shared pool (not hardcoded Chrome/122)
+        request = route.calls[0].request
+        user_agent = request.headers.get("user-agent", "")
+        assert any(ua in user_agent for ua in _USER_AGENTS), f"Expected shared UA, got: {user_agent}"
+        assert "Chrome/122" not in user_agent, "Should not use hardcoded Chrome/122"
+        assert request.headers.get("accept-language") == "en-US,en;q=0.9"
 
 
 @pytest.mark.asyncio

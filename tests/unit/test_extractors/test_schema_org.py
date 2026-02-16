@@ -303,3 +303,125 @@ class TestSchemaOrgExtractor:
         assert len(result) == 2
         assert result[0]["name"] == "Product 1"
         assert result[1]["name"] == "Product 2"
+
+    @pytest.mark.respx(base_url="https://example.com")
+    async def test_array_type_with_product(self, extractor, respx_mock):
+        """Test extraction when @type is an array containing Product."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": ["Product", "ItemPage"],
+                "name": "Array Type Product",
+                "sku": "ARRAY123"
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+
+        respx_mock.get("/array-type").mock(return_value=Response(200, text=html))
+
+        result = await extractor.extract("https://example.com/array-type")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "Array Type Product"
+        assert result[0]["sku"] == "ARRAY123"
+
+    @pytest.mark.respx(base_url="https://example.com")
+    async def test_full_iri_product_type(self, extractor, respx_mock):
+        """Test extraction when @type is a full IRI (https://schema.org/Product)."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "https://schema.org/Product",
+                "name": "IRI Product",
+                "sku": "IRI123"
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+
+        respx_mock.get("/iri-type").mock(return_value=Response(200, text=html))
+
+        result = await extractor.extract("https://example.com/iri-type")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "IRI Product"
+
+    @pytest.mark.respx(base_url="https://example.com")
+    async def test_graph_with_array_types(self, extractor, respx_mock):
+        """Test extraction from @graph with array @type values."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@graph": [
+                    {
+                        "@type": ["WebPage", "CollectionPage"],
+                        "name": "Not a product"
+                    },
+                    {
+                        "@type": ["Product", "Offer"],
+                        "name": "Graph Array Product",
+                        "sku": "GRAPH_ARR123"
+                    }
+                ]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+
+        respx_mock.get("/graph-array").mock(return_value=Response(200, text=html))
+
+        result = await extractor.extract("https://example.com/graph-array")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "Graph Array Product"
+
+    @pytest.mark.respx(base_url="https://example.com")
+    async def test_headers_sent(self, extractor, respx_mock):
+        """Test that User-Agent and Accept-Language headers are sent."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@type": "Product",
+                "name": "Header Test Product"
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+
+        route = respx_mock.get("/headers-test").mock(return_value=Response(200, text=html))
+
+        result = await extractor.extract("https://example.com/headers-test")
+
+        assert len(result) == 1
+        assert route.called
+
+        # Verify headers were sent
+        request = route.calls.last.request
+        assert "User-Agent" in request.headers
+        assert "Mozilla" in request.headers["User-Agent"]
+        assert "Accept-Language" in request.headers
+        assert "en-US" in request.headers["Accept-Language"]
