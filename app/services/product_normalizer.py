@@ -281,8 +281,13 @@ class ProductNormalizer:
 
         Tries to detect Schema.org JSON-LD, OpenGraph, or direct field mapping.
         """
-        # Try Schema.org JSON-LD
-        if "name" in raw and "offers" in raw:
+        # Try Schema.org JSON-LD — route if has "offers" or looks like a Product type
+        is_schema_org = "name" in raw and (
+            "offers" in raw
+            or (isinstance(raw.get("@type"), str) and "Product" in raw.get("@type", ""))
+            or (isinstance(raw.get("@type"), list) and any("Product" in str(t) for t in raw["@type"]))
+        )
+        if is_schema_org:
             return self._normalize_schema_org(raw, shop_url)
 
         # Try OpenGraph
@@ -320,6 +325,12 @@ class ProductNormalizer:
             image_url = (first.get("url") or first.get("contentUrl") or "") if isinstance(first, dict) else first
         else:
             image_url = image
+
+        # Fallback chain for missing image: thumbnailUrl → og:image
+        if not image_url:
+            image_url = raw.get("thumbnailUrl", "")
+        if not image_url:
+            image_url = raw.get("og:image", "")
 
         # Extract availability from offers (already normalised to dict above)
         availability = offers.get("availability", "")

@@ -31,8 +31,27 @@ class SchemaOrgExtractor(BaseExtractor):
         return False
 
     @staticmethod
+    def _extract_og_meta(soup: BeautifulSoup) -> dict[str, str]:
+        """Extract OpenGraph meta tags from page as a fallback data source.
+
+        Returns:
+            Dict of OG properties (e.g., {"og:image": "https://...", "og:title": "..."})
+        """
+        og_data: dict[str, str] = {}
+        for meta in soup.find_all("meta", attrs={"property": True}):
+            prop = meta.get("property", "")
+            content = meta.get("content", "")
+            if prop.startswith("og:") and content:
+                og_data[prop] = content.strip()
+        return og_data
+
+    @staticmethod
     def extract_from_html(html: str, url: str) -> list[dict]:
         """Extract JSON-LD from raw HTML content.
+
+        Enriches sparse JSON-LD products with OpenGraph meta tags from the same
+        page. This handles sites (like Bombas) that embed minimal JSON-LD stubs
+        on some pages but still include og:image and other OG tags.
 
         Args:
             html: Raw HTML content
@@ -80,6 +99,21 @@ class SchemaOrgExtractor(BaseExtractor):
 
             if not products:
                 logger.debug("No Product objects found in JSON-LD on %s", url)
+                return products
+
+            # Enrich sparse JSON-LD with OG meta tags from the same page
+            og_data = SchemaOrgExtractor._extract_og_meta(soup)
+            if og_data:
+                for product in products:
+                    # Fill missing image from og:image
+                    if not product.get("image") and og_data.get("og:image"):
+                        product["og:image"] = og_data["og:image"]
+                    # Fill missing URL from og:url
+                    if not product.get("url") and og_data.get("og:url"):
+                        product["url"] = og_data["og:url"]
+                    # Fill missing description from og:description
+                    if not product.get("description") and og_data.get("og:description"):
+                        product["description"] = og_data["og:description"]
 
             return products
 

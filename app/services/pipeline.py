@@ -6,6 +6,7 @@ Contains NO business logic itself - only calls components in order.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -35,6 +36,9 @@ if TYPE_CHECKING:
     from app.infra.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+# Pipeline-level timeout: 30 minutes max for any single job
+_PIPELINE_TIMEOUT_SECONDS = 30 * 60
 
 
 class Pipeline:
@@ -71,25 +75,37 @@ class Pipeline:
         self.smart_css = smart_css_extractor
         self.llm_extractor = llm_extractor
 
-    async def run(self, job_id: str, shop_url: str) -> dict:
+    async def run(
+        self, job_id: str, shop_url: str, timeout: int = _PIPELINE_TIMEOUT_SECONDS
+    ) -> dict:
         """Run the full pipeline: detect → discover → extract → normalize → ingest.
 
         Args:
             job_id: Unique job identifier for progress tracking
             shop_url: Merchant shop URL to onboard
+            timeout: Max seconds before the pipeline is killed (default 30 min)
 
         Returns:
             Summary dict with platform, counts, and extraction tier
-
-        Example:
-            {
-                "platform": "shopify",
-                "total_extracted": 150,
-                "total_normalized": 148,
-                "total_ingested": 148,
-                "extraction_tier": "api"
-            }
         """
+        try:
+            return await asyncio.wait_for(
+                self._run_inner(job_id, shop_url), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error("Pipeline timed out after %ds for job %s", timeout, job_id)
+            await self.progress.update(
+                job_id=job_id,
+                processed=0,
+                total=0,
+                status=JobStatus.FAILED,
+                current_step="Pipeline failed",
+                error=f"Pipeline timed out after {timeout // 60} minutes",
+            )
+            raise
+
+    async def _run_inner(self, job_id: str, shop_url: str) -> dict:
+        """Inner pipeline logic wrapped by run() with timeout."""
         logger.info(f"Starting pipeline for job {job_id}, shop URL: {shop_url}")
 
         try:
@@ -292,6 +308,7 @@ class Pipeline:
         if platform == Platform.SHOPIFY:
             extractor = ShopifyAPIExtractor()
             extraction_tier = ExtractionTier.API
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
@@ -305,6 +322,7 @@ class Pipeline:
         elif platform == Platform.WOOCOMMERCE:
             extractor = WooCommerceAPIExtractor()
             extraction_tier = ExtractionTier.API
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
@@ -318,6 +336,7 @@ class Pipeline:
         elif platform == Platform.MAGENTO:
             extractor = MagentoAPIExtractor()
             extraction_tier = ExtractionTier.API
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
@@ -374,22 +393,39 @@ class Pipeline:
             return [], ExtractionTier.DEEP_CRAWL
 
         probe_url = urls[0]
+        total_urls = len(urls)
         # Partial results from probed tiers (for merging into winning tier)
         partial_probes: list[dict] = []
 
+        async def _set_probe_step(tier_name: str) -> None:
+            await self.progress.update(
+                job_id=job_id,
+                processed=0,
+                total=total_urls,
+                status=JobStatus.EXTRACTING,
+                current_step=f"Probing {tier_name} tier on sample URL",
+            )
+
+        async def _commit_tier(tier: ExtractionTier) -> None:
+            await self.progress.set_metadata(job_id, extraction_tier=tier.value)
+
         # Tier 2: Schema.org on first URL
+        await _set_probe_step("Schema.org")
         schema_extractor = SchemaOrgExtractor()
         schema_products = await self._extract_with_circuit_breaker(schema_extractor, probe_url, shop_url)
         if self._probe_acceptable(schema_products, "Schema.org"):
+            await _commit_tier(ExtractionTier.SCHEMA_ORG)
             products = await self._extract_from_urls(schema_extractor, urls, shop_url, job_id)
             return products, ExtractionTier.SCHEMA_ORG
         if schema_products:
             partial_probes.extend(schema_products)
 
         # Tier 3: OpenGraph on first URL
+        await _set_probe_step("OpenGraph")
         og_extractor = OpenGraphExtractor()
         og_products = await self._extract_with_circuit_breaker(og_extractor, probe_url, shop_url)
         if self._probe_acceptable(og_products, "OpenGraph"):
+            await _commit_tier(ExtractionTier.OPENGRAPH)
             products = await self._extract_from_urls(og_extractor, urls, shop_url, job_id)
             if partial_probes:
                 products = self._merge_tier_fields(products, partial_probes)
@@ -399,9 +435,10 @@ class Pipeline:
 
         # Tier 4: SmartCSS (auto-generated selectors, if configured)
         if self.smart_css:
-            logger.info("Trying SmartCSS extraction (auto-generated selectors)")
+            await _set_probe_step("SmartCSS")
             smart_products = await self._extract_with_circuit_breaker(self.smart_css, probe_url, shop_url)
             if self._probe_acceptable(smart_products, "SmartCSS"):
+                await _commit_tier(ExtractionTier.SMART_CSS)
                 products = await self._extract_from_urls(self.smart_css, urls, shop_url, job_id)
                 if partial_probes:
                     products = self._merge_tier_fields(products, partial_probes)
@@ -413,9 +450,10 @@ class Pipeline:
 
         # Tier 5: LLM extraction (universal fallback, if configured)
         if self.llm_extractor:
-            logger.info("Trying LLM extraction (universal fallback)")
+            await _set_probe_step("LLM")
             llm_products = await self._extract_with_circuit_breaker(self.llm_extractor, probe_url, shop_url)
             if self._probe_acceptable(llm_products, "LLM"):
+                await _commit_tier(ExtractionTier.LLM)
                 products = await self._extract_from_urls(self.llm_extractor, urls, shop_url, job_id)
                 if partial_probes:
                     products = self._merge_tier_fields(products, partial_probes)
@@ -425,7 +463,14 @@ class Pipeline:
 
         # Fallback: hardcoded CSS (for when no tier probe was acceptable)
         schema = css_schema or GENERIC_SCHEMA
-        logger.info("Falling back to hardcoded CSS extraction")
+        await _commit_tier(ExtractionTier.DEEP_CRAWL)
+        await self.progress.update(
+            job_id=job_id,
+            processed=0,
+            total=total_urls,
+            status=JobStatus.EXTRACTING,
+            current_step="Falling back to CSS extraction",
+        )
         css_extractor = CSSExtractor(schema)
         products = await self._extract_from_urls(css_extractor, urls, shop_url, job_id)
         if partial_probes:
@@ -531,29 +576,40 @@ class Pipeline:
             return []
 
     async def _extract_from_urls(
-        self, extractor, urls: list[str], domain: str, job_id: str
+        self, extractor, urls: list[str], domain: str, job_id: str,
+        batch_size: int = 50,
     ) -> list[dict]:
-        """Extract products from multiple URLs using batch extraction.
+        """Extract products from URLs in batches with incremental progress.
 
-        Uses extract_batch() which, for browser-based extractors, opens a single
-        browser and crawls all URLs concurrently via arun_many().
+        Splits URLs into batches, extracts each batch, and updates progress
+        after every batch so the frontend shows real-time extraction progress.
 
         Args:
             extractor: Extractor instance
             urls: List of URLs to extract from
             domain: Domain for rate limiting (unused — arun_many handles concurrency)
             job_id: Job identifier for progress tracking
+            batch_size: Number of URLs per batch (default 50)
 
         Returns:
             List of raw product dicts from all URLs
         """
-        products = await extractor.extract_batch(urls)
+        total = len(urls)
+        all_products: list[dict] = []
+        processed = 0
 
-        await self.progress.update(
-            job_id=job_id,
-            processed=len(urls),
-            total=len(urls),
-            status=JobStatus.EXTRACTING,
-            current_step=f"Extracted {len(urls)} URLs, got {len(products)} products",
-        )
-        return products
+        for i in range(0, total, batch_size):
+            batch = urls[i : i + batch_size]
+            products = await extractor.extract_batch(batch)
+            all_products.extend(products)
+            processed += len(batch)
+
+            await self.progress.update(
+                job_id=job_id,
+                processed=processed,
+                total=total,
+                status=JobStatus.EXTRACTING,
+                current_step=f"Extracted {processed}/{total} URLs, got {len(all_products)} products",
+            )
+
+        return all_products

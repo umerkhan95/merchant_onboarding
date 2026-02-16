@@ -32,7 +32,11 @@ async def _run_pipeline_direct(
     db: DatabaseClient | None,
 ) -> None:
     """Run the pipeline directly (no Celery) as an async background task."""
+    from app.config import settings
     from app.db.bulk_ingestor import BulkIngestor
+    from app.extractors.llm_extractor import LLMExtractor
+    from app.extractors.schema_cache import SchemaCache
+    from app.extractors.smart_css_extractor import SmartCSSExtractor
     from app.infra.circuit_breaker import CircuitBreaker
     from app.infra.rate_limiter import RateLimiter
     from app.services.pipeline import Pipeline
@@ -42,11 +46,26 @@ async def _run_pipeline_direct(
     rate_limiter = RateLimiter()
     ingestor = BulkIngestor(db) if db is not None else None
 
+    # Initialize LLM-powered extractors (Tiers 4-5) if API key is configured
+    smart_css_extractor = None
+    llm_extractor = None
+    llm_config = settings.create_llm_config()
+    if llm_config:
+        schema_cache = SchemaCache(redis_client=redis_client, ttl=settings.schema_cache_ttl)
+        smart_css_extractor = SmartCSSExtractor(llm_config=llm_config, schema_cache=schema_cache)
+        llm_extractor = LLMExtractor(
+            llm_config=llm_config,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+        )
+
     pipeline = Pipeline(
         progress_tracker=tracker,
         circuit_breaker=circuit_breaker,
         rate_limiter=rate_limiter,
         bulk_ingestor=ingestor,
+        smart_css_extractor=smart_css_extractor,
+        llm_extractor=llm_extractor,
     )
 
     try:
