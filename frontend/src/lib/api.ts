@@ -1,4 +1,4 @@
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "dev-key";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "dev-key-1";
 
 export async function apiFetch<T>(
   path: string,
