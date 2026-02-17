@@ -64,10 +64,18 @@ class QualityScorer:
 
     @staticmethod
     def _has_any_field(product: dict, field_names: tuple[str, ...]) -> bool:
-        """Check if product has any of the given fields with a non-empty value."""
+        """Check if product has any of the given fields with a non-empty value.
+
+        Numeric zero is treated as *absent* — a price of 0 is not meaningful data.
+        """
         for name in field_names:
             val = product.get(name)
             if val is None:
+                continue
+            # Handle numeric zero (e.g., price=0)
+            if isinstance(val, (int, float)):
+                if val != 0:
+                    return True
                 continue
             # Handle lists (e.g., images: [{src: ...}])
             if isinstance(val, list):

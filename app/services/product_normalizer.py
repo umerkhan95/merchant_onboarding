@@ -57,10 +57,34 @@ class ProductNormalizer:
 
         # Validate and create Product
         try:
-            return Product(**normalized_data)
+            product = Product(**normalized_data)
         except Exception as e:
             logger.warning(f"Failed to create Product from normalized data: {e}")
             return None
+
+        if not self._is_valid_product(product):
+            return None
+        return product
+
+    def _is_valid_product(self, product: Product) -> bool:
+        """Reject products that have no price, no image, AND no identifier.
+
+        This catches non-product pages (blog posts, category pages) that slip
+        through extraction with zero price and no meaningful data.  Products
+        with at least one identifying attribute (price > 0, an image, a SKU,
+        or an external_id) are kept.
+        """
+        has_price = product.price > 0
+        has_image = bool(product.image_url and product.image_url.strip())
+        has_identifier = bool(product.sku) or bool(
+            product.external_id and product.external_id.strip()
+        )
+        if not has_price and not has_image and not has_identifier:
+            logger.info(
+                "Rejected non-product: title=%r price=%s", product.title, product.price
+            )
+            return False
+        return True
 
     def _normalize_shopify(self, raw: dict, shop_url: str) -> dict | None:
         """Normalize Shopify /products.json format."""

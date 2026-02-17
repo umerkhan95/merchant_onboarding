@@ -88,6 +88,11 @@ class TestScoreProduct:
         score = scorer.score_product(product)
         assert score > 0.4
 
+    def test_zero_price_not_counted(self, scorer):
+        """Zero price should not count as having a price field."""
+        product = {"title": "Product", "price": 0}
+        assert scorer.score_product(product) == pytest.approx(0.4)
+
     def test_empty_dict(self, scorer):
         """Empty dict scores 0.0."""
         assert scorer.score_product({}) == 0.0

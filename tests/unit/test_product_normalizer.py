@@ -847,7 +847,7 @@ class TestGenericCSSNormalization:
             assert product.price == expected, f"Failed for {price_str}"
 
     def test_normalize_generic_css_invalid_price(self, normalizer):
-        """Handle invalid price gracefully."""
+        """Invalid price string → price=0, no image, no SKU → rejected as non-product."""
         raw = {"title": "Test", "price": "invalid"}
 
         product = normalizer.normalize(
@@ -857,7 +857,7 @@ class TestGenericCSSNormalization:
             shop_url="https://example.com",
         )
 
-        assert product.price == Decimal("0")
+        assert product is None
 
     def test_normalize_generic_css_field_aliases(self, normalizer):
         """Generic CSS should recognize title aliases."""
@@ -903,9 +903,9 @@ class TestGenericCSSNormalization:
     def test_normalize_generic_css_url_aliases(self, normalizer):
         """Generic CSS should recognize product_url aliases."""
         test_cases = [
-            {"title": "Test", "product_url": "https://example.com/product1"},
-            {"title": "Test", "url": "https://example.com/product2"},
-            {"title": "Test", "canonical": "https://example.com/product3"},
+            {"title": "Test", "price": "9.99", "product_url": "https://example.com/product1"},
+            {"title": "Test", "price": "9.99", "url": "https://example.com/product2"},
+            {"title": "Test", "price": "9.99", "canonical": "https://example.com/product3"},
         ]
 
         expected_urls = [
@@ -1074,3 +1074,91 @@ class TestEdgeCases:
 
         assert product1.product_url == "https://test.com/products/test"
         assert product2.product_url == "https://test.com/products/test"
+
+
+class TestProductValidityGate:
+    """Test _is_valid_product quality gate in normalize()."""
+
+    def test_rejects_zero_price_no_image_no_sku(self, normalizer):
+        """Blog post: price=0, no image, no SKU, no external_id → rejected."""
+        raw = {"title": "Awards Blog Post", "price": "0"}
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is None
+
+    def test_allows_zero_price_with_image(self, normalizer):
+        """Free sample with image → passes (has image)."""
+        raw = {
+            "title": "Free Sample",
+            "price": "0",
+            "image": "https://example.com/sample.jpg",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.price == Decimal("0")
+        assert product.image_url == "https://example.com/sample.jpg"
+
+    def test_allows_zero_price_with_sku(self, normalizer):
+        """Free digital download with SKU → passes."""
+        raw = {"title": "Free Download", "price": "0", "sku": "FREE-DL-001"}
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.sku == "FREE-DL-001"
+
+    def test_allows_zero_price_with_external_id(self, normalizer):
+        """API product with external_id → passes even with price=0."""
+        raw = {
+            "id": 7891234567890,
+            "title": "Shopify Zero Price Product",
+            "handle": "zero-price",
+            "variants": [{"id": 1, "price": "0.00"}],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.external_id == "7891234567890"
+
+    def test_allows_normal_product(self, normalizer):
+        """Standard product with price, image, and SKU → passes."""
+        raw = {
+            "title": "Normal Product",
+            "price": "$29.99",
+            "image": "https://example.com/img.jpg",
+            "sku": "NP-001",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.price == Decimal("29.99")
