@@ -1,0 +1,738 @@
+{
+  "timestamp": "2026-02-15T03:54:39.390780+00:00",
+  "git_sha": "98b2e7f144f38b8d0cd2d7ee59d1e99925d7ec12",
+  "results": {
+    "Allbirds": {
+      "schema_org": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 5,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.5248317540983345,
+        "products_extracted": 5,
+        "products_matched": 5,
+        "field_averages": {
+          "title": 0.5489905245900065,
+          "price": 1.0,
+          "currency": 1.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.6
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.121985941985942,
+        "products_extracted": 4,
+        "products_matched": 5,
+        "field_averages": {
+          "title": 0.7319156519156519,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.15840316272537408,
+        "products_extracted": 3,
+        "products_matched": 5,
+        "field_averages": {
+          "title": 0.5481318681318681,
+          "price": 0.4,
+          "currency": 0.0,
+          "vendor": 0.002287108220376404,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.36666666666666664,
+        "products_extracted": 4,
+        "products_matched": 5,
+        "field_averages": {
+          "title": 0.8,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.6,
+          "in_stock": 0.0,
+          "product_url": 0.8
+        }
+      }
+    },
+    "Bombas": {
+      "schema_org": {
+        "avg_score": 0.6611111111111111,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.9666666666666667,
+          "price": 1.0,
+          "currency": 0.0,
+          "vendor": 1.0,
+          "in_stock": 1.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.3277777777777778,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.9666666666666667,
+          "price": 1.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.4444444444444444,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 1.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.6666666666666666,
+          "in_stock": 0.0,
+          "product_url": 1.0
+        }
+      }
+    },
+    "Cotopaxi": {
+      "schema_org": {
+        "avg_score": 0.76943716006216,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.9639423076923078,
+          "price": 1.0,
+          "currency": 1.0,
+          "vendor": 0.6526806526806527,
+          "in_stock": 1.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.6649305555555555,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.9895833333333334,
+          "price": 1.0,
+          "currency": 1.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 1.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.109375,
+        "products_extracted": 2,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.65625,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.3203014335089807,
+        "products_extracted": 2,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.5884752677205508,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.6666666666666666,
+          "in_stock": 0.0,
+          "product_url": 0.6666666666666666
+        }
+      }
+    },
+    "Farfetch": {
+      "schema_org": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      }
+    },
+    "Gymshark": {
+      "schema_org": {
+        "avg_score": 0.7519332519332519,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.94017094017094,
+          "price": 1.0,
+          "currency": 1.0,
+          "vendor": 0.5714285714285714,
+          "in_stock": 1.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.10094429007909893,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.6056657404745937,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.16666666666666666,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 1.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.3333333333333333,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 1.0,
+          "price": 1.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      }
+    },
+    "Huel": {
+      "schema_org": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.062258153676064125,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.37354892205638474,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 1,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.20513617065341203,
+        "products_extracted": 2,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.5641503572538055,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.6666666666666666
+        }
+      }
+    },
+    "Lululemon": {
+      "schema_org": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.0880503144654088,
+        "products_extracted": 2,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.19496855345911948,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.3333333333333333
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      }
+    },
+    "Nordstrom": {
+      "schema_org": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.0,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      }
+    },
+    "REI": {
+      "schema_org": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.0,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "product_url": 0.0
+        }
+      }
+    },
+    "Skullcandy": {
+      "schema_org": {
+        "avg_score": 0.9756276359174909,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.9598282340311325,
+          "price": 1.0,
+          "currency": 1.0,
+          "vendor": 0.8695652173913043,
+          "in_stock": 1.0,
+          "sku": 1.0,
+          "product_url": 1.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.45738182086643375,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.20167274606503607,
+          "price": 1.0,
+          "currency": 1.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "sku": 0.0,
+          "product_url": 1.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.08760683760683761,
+        "products_extracted": 2,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.6132478632478633,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 0.0,
+          "in_stock": 0.0,
+          "sku": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.20717205499814195,
+        "products_extracted": 2,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.6132478632478633,
+          "price": 0.6666666666666666,
+          "currency": 0.0,
+          "vendor": 0.17028985507246377,
+          "in_stock": 0.0,
+          "sku": 0.0,
+          "product_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.34677059229488894,
+        "products_extracted": 3,
+        "products_matched": 3,
+        "field_averages": {
+          "title": 0.4273941460642228,
+          "price": 0.0,
+          "currency": 0.0,
+          "vendor": 1.0,
+          "in_stock": 0.0,
+          "sku": 0.0,
+          "product_url": 1.0
+        }
+      }
+    },
+    "Test Offline Mode": {
+      "schema_org": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 1,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "image_url": 0.0
+        }
+      },
+      "opengraph": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 1,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "image_url": 0.0
+        }
+      },
+      "css_generic": {
+        "avg_score": 0.0,
+        "products_extracted": 1,
+        "products_matched": 1,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "image_url": 0.0
+        }
+      },
+      "smart_css": {
+        "avg_score": 0.0,
+        "products_extracted": 1,
+        "products_matched": 1,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "image_url": 0.0
+        }
+      },
+      "llm": {
+        "avg_score": 0.0,
+        "products_extracted": 0,
+        "products_matched": 1,
+        "field_averages": {
+          "title": 0.0,
+          "price": 0.0,
+          "currency": 0.0,
+          "image_url": 0.0
+        }
+      }
+    }
+  }
+}

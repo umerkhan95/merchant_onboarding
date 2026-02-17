@@ -1,0 +1,63 @@
+{
+  "name": "House of Malt",
+  "url": "https://www.houseofmalt.co.uk",
+  "platform": "woocommerce",
+  "min_products": 20,
+  "products": [
+    {
+      "title": "Glencairn Crystal Whisky Tasting Glass With House of Malt Engraving",
+      "sku": "GLENCAIRN1",
+      "product_url": "https://www.houseofmalt.co.uk/product/glencairn-whisky-glass-hom/",
+      "price": "4.90",
+      "currency": "GBP",
+      "image_url": "https://www.houseofmalt.co.uk/wp-content/uploads/2018/06/HoM-Glencairn-Glass.jpg",
+      "in_stock": true,
+      "vendor": "Glencairn",
+      "product_type": "Glassware and Gifts"
+    },
+    {
+      "title": "Oban 14 Year Old Highland Single Malt Scotch Whisky 70cl",
+      "sku": "OBAN14",
+      "product_url": "https://www.houseofmalt.co.uk/product/oban-14-year-old-highland-single-malt-whisky/",
+      "price": "84.95",
+      "currency": "GBP",
+      "image_url": "https://www.houseofmalt.co.uk/wp-content/uploads/2018/06/Oban-14-Year-Old-Highland-Single-Malt-Scotch-Whisky.jpg",
+      "in_stock": true,
+      "vendor": "Oban",
+      "product_type": "Top Selling Loss Leaders"
+    },
+    {
+      "title": "Ardbeg Uigeadail Islay Single Malt Scotch Whisky 70cl",
+      "sku": "ARDBEGUIGEDAIL",
+      "product_url": "https://www.houseofmalt.co.uk/product/ardbeg-uigeadail-islay-single-malt-whisky/",
+      "price": "66.95",
+      "currency": "GBP",
+      "image_url": "https://www.houseofmalt.co.uk/wp-content/uploads/2018/06/Ardbeg-Uigeadail-Islay-Single-Malt-Scotch-Whisky.jpg",
+      "in_stock": true,
+      "vendor": "Ardbeg",
+      "product_type": "Islay Whisky"
+    },
+    {
+      "title": "Wolfburn Northland 8 Year Old Highland Single Malt Scotch Whisky 70cl",
+      "sku": "WOLFBURNNORTHLAND",
+      "product_url": "https://www.houseofmalt.co.uk/product/wolfburn-northland-highland-single-malt-whisky/",
+      "price": "42.95",
+      "currency": "GBP",
+      "image_url": "https://www.houseofmalt.co.uk/wp-content/uploads/2025/11/Wolfburn-8-Year-Old-Northland-Quarter-Cask-Highland-Single-Malt-Scotch-Whisky-70cl.jpg",
+      "in_stock": true,
+      "vendor": "Wolfburn",
+      "product_type": "Highland Whisky"
+    },
+    {
+      "title": "Glenfarclas 25 Year Old Speyside Single Malt Scotch Whisky 70cl",
+      "sku": "GLENFARCLAS25",
+      "product_url": "https://www.houseofmalt.co.uk/product/glenfarclas-25-year-old-single-malt-whisky/",
+      "price": "229.95",
+      "currency": "GBP",
+      "image_url": "https://www.houseofmalt.co.uk/wp-content/uploads/2021/09/Glenfarclas-25-Year-Old-Speyside-Single-Malt-Scotch-Whisky-70cl.jpg",
+      "in_stock": true,
+      "vendor": "Glenfarclas",
+      "product_type": "Scotch Whisky"
+    }
+  ]
+}

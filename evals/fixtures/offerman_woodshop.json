@@ -1,0 +1,58 @@
+{
+  "name": "Offerman Woodshop",
+  "url": "https://www.offermanwoodshop.com",
+  "platform": "woocommerce",
+  "min_products": 20,
+  "products": [
+    {
+      "title": "Walnut Coaster Set",
+      "sku": "WD-WALNUTCOASTERSET",
+      "product_url": "https://offermanwoodshop.com/store/kindlin/hearth-home/walnut-coaster-set",
+      "price": "50.00",
+      "currency": "USD",
+      "image_url": "https://offermanwoodshop.com/wp-content/uploads/2026/01/quad-1.jpg",
+      "in_stock": true,
+      "product_type": "Accounting_OWS"
+    },
+    {
+      "title": "LITTLE WOODCHUCKS sticker set",
+      "sku": "STICKER-WOODCHUCKS",
+      "product_url": "https://offermanwoodshop.com/store/kindlin/little-woodchucks-sticker-set",
+      "price": "5.00",
+      "currency": "USD",
+      "image_url": "https://offermanwoodshop.com/wp-content/uploads/2025/12/IMG_2068-scaled.jpg",
+      "in_stock": true,
+      "product_type": "Accounting_OWS"
+    },
+    {
+      "title": "Little Woodchucks Youth T-shirt",
+      "sku": "TSHRT-YOUTHLWDCK",
+      "product_url": "https://offermanwoodshop.com/store/shop-fashion/clothing/little-woodchucks-youth-t-shirt",
+      "price": "35.00",
+      "currency": "USD",
+      "image_url": "https://offermanwoodshop.com/wp-content/uploads/2025/11/woodchuckss-scaled.jpg",
+      "in_stock": true,
+      "product_type": "Accounting_OWS"
+    },
+    {
+      "title": "Woodchuck Love Card",
+      "sku": "CD-WDCHKLOVE",
+      "product_url": "https://offermanwoodshop.com/store/kindlin/cards/woodchuck-love-card",
+      "price": "16.00",
+      "currency": "USD",
+      "image_url": "https://offermanwoodshop.com/wp-content/uploads/2025/10/IMG_1816-scaled.jpg",
+      "in_stock": true,
+      "product_type": "Accounting_OWS"
+    },
+    {
+      "title": "Little Woodchucks **autographed",
+      "sku": "BK-LITTLEWOODCHUCKS-HRDCVR",
+      "product_url": "https://offermanwoodshop.com/store/library/books/little-woodchucks-autographed",
+      "price": "35.00",
+      "currency": "USD",
+      "image_url": "https://offermanwoodshop.com/wp-content/uploads/2025/09/IMG_1919-scaled.jpg",
+      "in_stock": true,
+      "product_type": "Accounting_Books"
+    }
+  ]
+}

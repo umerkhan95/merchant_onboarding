@@ -1,0 +1,54 @@
+{
+  "name": "Sawmill Designs",
+  "url": "https://www.sawmilldesigns.com",
+  "platform": "woocommerce",
+  "min_products": 20,
+  "products": [
+    {
+      "title": "Sawmill Samples",
+      "sku": "SAMPLES",
+      "product_url": "https://sawmilldesigns.com/product/sawmill-samples/",
+      "price": "24.95",
+      "currency": "USD",
+      "image_url": "https://sawmilldesigns.com/app/uploads/2020/05/samples-sawmill-feature.jpg",
+      "in_stock": false,
+      "product_type": "Samples"
+    },
+    {
+      "title": "Virginia Solid Wood Dining Table",
+      "product_url": "https://sawmilldesigns.com/product/virginia-solid-wood-dining-table/",
+      "price": "2495.00",
+      "currency": "USD",
+      "image_url": "https://sawmilldesigns.com/app/uploads/2024/06/Virginia-White-Oak-Table-Frisco-Fancy-FEATURE.jpg",
+      "in_stock": false,
+      "product_type": "Solid Wood Dining Tables"
+    },
+    {
+      "title": "Washington Solid Wood Dining Table",
+      "product_url": "https://sawmilldesigns.com/product/washington-solid-wood-dining-table/",
+      "price": "3795.00",
+      "currency": "USD",
+      "image_url": "https://sawmilldesigns.com/app/uploads/2024/06/Washington-Walnut-Table-Clean-Fancy-FEATURE.jpg",
+      "in_stock": false,
+      "product_type": "Solid Wood Dining Tables"
+    },
+    {
+      "title": "Montana Solid Wood Dining Table",
+      "product_url": "https://sawmilldesigns.com/product/montana-solid-wood-dining-table/",
+      "price": "3295.00",
+      "currency": "USD",
+      "image_url": "https://sawmilldesigns.com/app/uploads/2024/05/Montana-Dining-Table-White-Oak-Clean-Simple-6.jpg",
+      "in_stock": false,
+      "product_type": "Solid Wood Dining Tables"
+    },
+    {
+      "title": "Sand &#8211; Luxury Vinyl Plank Flooring",
+      "product_url": "https://sawmilldesigns.com/product/sand-luxury-vinyl-plank-flooring/",
+      "price": "0.00",
+      "currency": "USD",
+      "image_url": "https://sawmilldesigns.com/app/uploads/2023/01/Tierra-LVP-Sawmill-Designs-00001.jpeg",
+      "in_stock": false,
+      "product_type": "Luxury Vinyl Plank Flooring"
+    }
+  ]
+}
