@@ -52,6 +52,7 @@ class ExtractionResult:
     urls_attempted: int = 0
     urls_succeeded: int = 0
     errors: list[str] = field(default_factory=list)
+    audit: dict = field(default_factory=dict)
 
     @property
     def product_count(self) -> int:

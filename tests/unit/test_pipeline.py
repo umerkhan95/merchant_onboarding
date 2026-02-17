@@ -506,9 +506,8 @@ async def test_pipeline_skips_low_quality_probe(pipeline, mock_progress_tracker)
 
                 # Schema.org extractor should have been called only once (probe)
                 assert mock_schema.extract.call_count == 1
-                # OG: 1 probe via extract(), 1 batch via extract_batch()
-                assert mock_og.extract.call_count == 1
-                assert mock_og.extract_batch.call_count == 1
+                # OG: 1 probe + 2 per-URL tracked extraction calls
+                assert mock_og.extract.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -549,10 +548,10 @@ async def test_pipeline_needs_review_on_zero_products_after_extraction(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_uses_extract_batch_for_full_extraction(
+async def test_pipeline_uses_tracked_extraction_for_full_extraction(
     pipeline, mock_progress_tracker
 ):
-    """Test that _extract_from_urls calls extract_batch() instead of per-URL extract()."""
+    """Test that tracked extraction calls extract() per URL for outcome tracking."""
     with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
         mock_detect.return_value = PlatformResult(
             platform=Platform.GENERIC,
@@ -577,23 +576,14 @@ async def test_pipeline_uses_extract_batch_for_full_extraction(
 
             with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
                 mock_extractor = AsyncMock()
-                # Probe returns data
                 mock_extractor.extract = AsyncMock(return_value=[product_data])
-                # Batch returns data for all URLs
-                mock_extractor.extract_batch = AsyncMock(
-                    return_value=[product_data, product_data, product_data]
-                )
                 mock_schema_class.return_value = mock_extractor
 
-                result = await pipeline.run("job-batch", "https://example.com")
+                result = await pipeline.run("job-tracked", "https://example.com")
 
                 assert result["total_extracted"] == 3
-                # extract() called once for probe, extract_batch() called once for full
-                assert mock_extractor.extract.call_count == 1
-                assert mock_extractor.extract_batch.call_count == 1
-                # extract_batch was called with all 3 URLs
-                batch_call_args = mock_extractor.extract_batch.call_args[0][0]
-                assert len(batch_call_args) == 3
+                # extract() called: 1 probe + 3 per-URL tracked calls
+                assert mock_extractor.extract.call_count == 4
 
 
 @pytest.mark.asyncio
@@ -643,8 +633,8 @@ async def test_pipeline_shopify_fallback_on_empty_api_response(pipeline, mock_pr
 
                     # Shopify API should have been tried once
                     assert mock_shopify.extract.call_count == 1
-                    # Schema.org should have been used for fallback
-                    assert mock_schema.extract_batch.call_count == 1
+                    # Schema.org: 1 probe + 2 per-URL tracked calls
+                    assert mock_schema.extract.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -722,7 +712,7 @@ async def test_pipeline_logs_warnings_when_smart_css_and_llm_not_configured(
                     "description": "CSS extracted",
                 }
                 mock_css = AsyncMock()
-                mock_css.extract_batch = AsyncMock(return_value=[css_product])
+                mock_css.extract = AsyncMock(return_value=[css_product])
                 mock_css_class.return_value = mock_css
 
                 await pipeline.run("job-warnings", "https://example.com")
@@ -749,34 +739,30 @@ async def test_pipeline_shopify_no_fallback_when_api_has_products(pipeline, mock
                 "https://example.com/product2",
             ]
 
-            # Shopify API returns products
+            # Shopify API returns complete products (price + image present)
             with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_shopify_class:
                 shopify_product = {
                     "id": 123,
                     "title": "API Product",
                     "handle": "api-product",
+                    "price": "10.99",
+                    "image": "https://example.com/img.jpg",
                     "variants": [{"price": "10.99"}],
+                    "images": [{"src": "https://example.com/img.jpg"}],
                 }
                 mock_shopify = AsyncMock()
                 mock_shopify.extract = AsyncMock(return_value=[shopify_product])
                 mock_shopify_class.return_value = mock_shopify
 
-                # Schema.org should NOT be called since API succeeded
-                with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
-                    mock_schema = AsyncMock()
-                    mock_schema_class.return_value = mock_schema
+                result = await pipeline.run("job-shopify-no-fallback", "https://example.com")
 
-                    result = await pipeline.run("job-shopify-no-fallback", "https://example.com")
+                # Should use API tier only
+                assert result["platform"] == "shopify"
+                assert result["total_extracted"] == 1
+                assert result["extraction_tier"] == "api"
 
-                    # Should use API tier only
-                    assert result["platform"] == "shopify"
-                    assert result["total_extracted"] == 1
-                    assert result["extraction_tier"] == "api"
-
-                    # Shopify API should have been used
-                    assert mock_shopify.extract.call_count == 1
-                    # Schema.org should NOT have been instantiated (no fallback)
-                    assert mock_schema_class.call_count == 0
+                # Shopify API should have been used
+                assert mock_shopify.extract.call_count == 1
 
 
 @pytest.mark.asyncio

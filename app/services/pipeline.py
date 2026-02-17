@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+import httpx
+
 from app.extractors.base import ExtractionResult
 from app.extractors.css_extractor import CSSExtractor
 from app.extractors.magento_api import MagentoAPIExtractor
@@ -22,9 +24,13 @@ from app.extractors.shopify_api import ShopifyAPIExtractor
 from app.extractors.woocommerce_api import WooCommerceAPIExtractor
 from app.infra.quality_scorer import QualityScorer
 from app.models.enums import ExtractionTier, JobStatus, Platform
+from app.services.completeness_checker import CompletenessChecker
+from app.services.extraction_tracker import SOURCE_URL_KEY, ExtractionTracker
 from app.services.extraction_validator import ExtractionValidator
+from app.services.page_validator import ProductPageValidator
 from app.services.platform_detector import PlatformDetector
 from app.services.product_normalizer import ProductNormalizer
+from app.services.reconciliation_reporter import ReconciliationReporter
 from app.services.url_discovery import URLDiscoveryService
 
 if TYPE_CHECKING:
@@ -39,6 +45,12 @@ logger = logging.getLogger(__name__)
 
 # Pipeline-level timeout: 30 minutes max for any single job
 _PIPELINE_TIMEOUT_SECONDS = 30 * 60
+
+# Max URLs for targeted re-extraction (completeness pass)
+_MAX_REEXTRACTION_URLS = 50
+
+# Concurrent extraction batch size (URLs processed in parallel per batch)
+_EXTRACTION_CONCURRENCY = 10
 
 
 class Pipeline:
@@ -68,6 +80,9 @@ class Pipeline:
         self.normalizer = ProductNormalizer()
         self.quality_scorer = QualityScorer()
         self.validator = ExtractionValidator()
+        self.completeness_checker = CompletenessChecker()
+        self.reconciliation_reporter = ReconciliationReporter()
+        self.page_validator = ProductPageValidator()
         self.progress = progress_tracker
         self.circuit_breaker = circuit_breaker
         self.rate_limiter = rate_limiter
@@ -205,6 +220,29 @@ class Pipeline:
             extraction_tier = extraction_result.tier
             await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
 
+            # Step 3c: Verify data completeness + targeted re-extraction
+            await self.progress.update(
+                job_id=job_id,
+                processed=0,
+                total=len(raw_products),
+                status=JobStatus.VERIFYING,
+                current_step="Checking data completeness",
+            )
+
+            results = self.completeness_checker.check_batch(raw_products)
+            plan = self.completeness_checker.build_reextraction_plan(results)
+
+            reextract_urls = len(set(plan.urls_needing_price) | set(plan.urls_needing_image))
+            if reextract_urls > 0 and reextract_urls <= _MAX_REEXTRACTION_URLS:
+                logger.info(
+                    "Targeted re-extraction: %d incomplete products across %d URLs",
+                    plan.total_incomplete,
+                    reextract_urls,
+                )
+                raw_products = await self._targeted_reextract(
+                    raw_products, plan, shop_url
+                )
+
             # Step 4: Normalize products
             await self.progress.update(
                 job_id=job_id,
@@ -236,6 +274,19 @@ class Pipeline:
                     )
 
             logger.info(f"Normalized {len(normalized_products)} products")
+
+            # Step 4b: Reconciliation report
+            audit = extraction_result.audit
+            report = self.reconciliation_reporter.generate(
+                discovered_urls=urls,
+                audit_summary=audit,
+                products_normalized=len(normalized_products),
+            )
+            await self.progress.set_metadata(
+                job_id,
+                reconciliation_report=report.to_json(),
+                coverage_percentage=round(report.coverage_percentage, 2),
+            )
 
             # Step 5: Ingest products (if ingestor available)
             total_ingested = 0
@@ -273,6 +324,8 @@ class Pipeline:
                 "total_normalized": len(normalized_products),
                 "total_ingested": total_ingested,
                 "extraction_tier": extraction_tier.value,
+                "coverage_percentage": report.coverage_percentage,
+                "urls_failed": len(report.failed_urls),
             }
 
         except Exception as e:
@@ -302,8 +355,10 @@ class Pipeline:
             job_id: Job identifier for progress tracking
 
         Returns:
-            ExtractionResult with products, tier, and quality score
+            ExtractionResult with products, tier, quality score, and audit
         """
+        tracker = ExtractionTracker()
+
         # Select extractor based on platform
         if platform == Platform.SHOPIFY:
             extractor = ShopifyAPIExtractor()
@@ -312,11 +367,16 @@ class Pipeline:
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
+            if raw_products:
+                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                tracker.record_success(shop_url, len(raw_products))
+            else:
+                tracker.record_empty(shop_url)
             # Fallback to full chain on discovered URLs if API returned nothing
             if not raw_products and urls:
                 logger.info("Shopify API returned 0 products, falling back to extraction chain")
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                    urls, shop_url, job_id
+                    urls, shop_url, job_id, tracker=tracker
                 )
 
         elif platform == Platform.WOOCOMMERCE:
@@ -326,11 +386,16 @@ class Pipeline:
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
+            if raw_products:
+                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                tracker.record_success(shop_url, len(raw_products))
+            else:
+                tracker.record_empty(shop_url)
             # Fallback to full chain on discovered URLs if API returned nothing
             if not raw_products and urls:
                 logger.info("WooCommerce API returned 0 products, falling back to extraction chain")
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                    urls, shop_url, job_id
+                    urls, shop_url, job_id, tracker=tracker
                 )
 
         elif platform == Platform.MAGENTO:
@@ -340,29 +405,36 @@ class Pipeline:
             raw_products = await self._extract_with_circuit_breaker(
                 extractor, shop_url, shop_url
             )
+            if raw_products:
+                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                tracker.record_success(shop_url, len(raw_products))
+            else:
+                tracker.record_empty(shop_url)
             # Fallback to full chain on discovered URLs if API returned nothing
             if not raw_products and urls:
                 logger.info("Magento API returned 0 products, falling back to extraction chain")
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                    urls, shop_url, job_id
+                    urls, shop_url, job_id, tracker=tracker
                 )
 
         elif platform == Platform.BIGCOMMERCE:
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                urls, shop_url, job_id, css_schema=BIGCOMMERCE_SCHEMA
+                urls, shop_url, job_id, css_schema=BIGCOMMERCE_SCHEMA, tracker=tracker
             )
 
         else:  # Platform.GENERIC
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                urls, shop_url, job_id
+                urls, shop_url, job_id, tracker=tracker
             )
 
+        audit = tracker.build_audit()
         quality_score = self.quality_scorer.score_batch(raw_products)
         return ExtractionResult(
             products=raw_products,
             tier=extraction_tier,
             quality_score=quality_score,
             urls_attempted=len(urls),
+            audit=audit.to_summary_dict(),
         )
 
     async def _extract_with_fallback_chain(
@@ -371,6 +443,7 @@ class Pipeline:
         shop_url: str,
         job_id: str,
         css_schema: dict | None = None,
+        tracker: ExtractionTracker | None = None,
     ) -> tuple[list[dict], ExtractionTier]:
         """Try extraction strategies in priority order with cross-tier field merging.
 
@@ -385,6 +458,7 @@ class Pipeline:
             shop_url: Base shop URL (for rate limiting domain)
             job_id: Job identifier for progress tracking
             css_schema: Optional CSS schema (uses GENERIC_SCHEMA if None)
+            tracker: Optional ExtractionTracker for per-URL outcome recording
 
         Returns:
             Tuple of (raw_products, extraction_tier)
@@ -415,7 +489,9 @@ class Pipeline:
         schema_products = await self._extract_with_circuit_breaker(schema_extractor, probe_url, shop_url)
         if self._probe_acceptable(schema_products, "Schema.org"):
             await _commit_tier(ExtractionTier.SCHEMA_ORG)
-            products = await self._extract_from_urls(schema_extractor, urls, shop_url, job_id)
+            products = await self._extract_from_urls_tracked(
+                schema_extractor, urls, shop_url, job_id, tracker
+            )
             return products, ExtractionTier.SCHEMA_ORG
         if schema_products:
             partial_probes.extend(schema_products)
@@ -426,7 +502,9 @@ class Pipeline:
         og_products = await self._extract_with_circuit_breaker(og_extractor, probe_url, shop_url)
         if self._probe_acceptable(og_products, "OpenGraph"):
             await _commit_tier(ExtractionTier.OPENGRAPH)
-            products = await self._extract_from_urls(og_extractor, urls, shop_url, job_id)
+            products = await self._extract_from_urls_tracked(
+                og_extractor, urls, shop_url, job_id, tracker
+            )
             if partial_probes:
                 products = self._merge_tier_fields(products, partial_probes)
             return products, ExtractionTier.OPENGRAPH
@@ -439,7 +517,9 @@ class Pipeline:
             smart_products = await self._extract_with_circuit_breaker(self.smart_css, probe_url, shop_url)
             if self._probe_acceptable(smart_products, "SmartCSS"):
                 await _commit_tier(ExtractionTier.SMART_CSS)
-                products = await self._extract_from_urls(self.smart_css, urls, shop_url, job_id)
+                products = await self._extract_from_urls_tracked(
+                    self.smart_css, urls, shop_url, job_id, tracker
+                )
                 if partial_probes:
                     products = self._merge_tier_fields(products, partial_probes)
                 return products, ExtractionTier.SMART_CSS
@@ -454,7 +534,9 @@ class Pipeline:
             llm_products = await self._extract_with_circuit_breaker(self.llm_extractor, probe_url, shop_url)
             if self._probe_acceptable(llm_products, "LLM"):
                 await _commit_tier(ExtractionTier.LLM)
-                products = await self._extract_from_urls(self.llm_extractor, urls, shop_url, job_id)
+                products = await self._extract_from_urls_tracked(
+                    self.llm_extractor, urls, shop_url, job_id, tracker
+                )
                 if partial_probes:
                     products = self._merge_tier_fields(products, partial_probes)
                 return products, ExtractionTier.LLM
@@ -472,10 +554,23 @@ class Pipeline:
             current_step="Falling back to CSS extraction",
         )
         css_extractor = CSSExtractor(schema)
-        products = await self._extract_from_urls(css_extractor, urls, shop_url, job_id)
+        products = await self._extract_from_urls_tracked(
+            css_extractor, urls, shop_url, job_id, tracker
+        )
         if partial_probes:
             products = self._merge_tier_fields(products, partial_probes)
         return products, ExtractionTier.DEEP_CRAWL
+
+    @staticmethod
+    def _is_value_present(val: object) -> bool:
+        """Return True if val is non-None and non-empty (string/list/dict aware)."""
+        if val is None:
+            return False
+        if isinstance(val, str) and not val.strip():
+            return False
+        if isinstance(val, (list, dict)) and not val:
+            return False
+        return True
 
     @staticmethod
     def _merge_tier_fields(
@@ -496,31 +591,20 @@ class Pipeline:
         if not supplementary or not primary:
             return primary
 
-        # Build a merged supplementary dict from all probe results
         merged_supplement: dict[str, object] = {}
         for supp in supplementary:
             for key, val in supp.items():
                 if key in merged_supplement:
                     continue
-                if val is None:
-                    continue
-                if isinstance(val, str) and not val.strip():
-                    continue
-                if isinstance(val, (list, dict)) and not val:
-                    continue
-                merged_supplement[key] = val
+                if Pipeline._is_value_present(val):
+                    merged_supplement[key] = val
 
         if not merged_supplement:
             return primary
 
         for product in primary:
             for key, val in merged_supplement.items():
-                existing = product.get(key)
-                if existing is None:
-                    product[key] = val
-                elif isinstance(existing, str) and not existing.strip():
-                    product[key] = val
-                elif isinstance(existing, (list, dict)) and not existing:
+                if not Pipeline._is_value_present(product.get(key)):
                     product[key] = val
 
         return primary
@@ -575,35 +659,85 @@ class Pipeline:
             logger.error(f"Extraction failed for {url}: {e}")
             return []
 
-    async def _extract_from_urls(
-        self, extractor, urls: list[str], domain: str, job_id: str,
-        batch_size: int = 50,
-    ) -> list[dict]:
-        """Extract products from URLs in batches with incremental progress.
+    async def _fetch_html(self, url: str) -> str | None:
+        """Fetch raw HTML for page validation (lightweight httpx, no browser).
 
-        Splits URLs into batches, extracts each batch, and updates progress
-        after every batch so the frontend shows real-time extraction progress.
+        Returns HTML string on success, None on any failure.
+        """
+        from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
+
+        headers = {**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()}
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True, timeout=10.0, headers=headers
+            ) as client:
+                resp = await client.get(url)
+                if resp.status_code < 400:
+                    return resp.text
+        except Exception as e:
+            logger.debug("HTML fetch for validation failed for %s: %s", url, e)
+        return None
+
+    async def _extract_from_urls_tracked(
+        self,
+        extractor,
+        urls: list[str],
+        domain: str,
+        job_id: str,
+        tracker: ExtractionTracker,
+    ) -> list[dict]:
+        """Extract products per-URL with source tagging, outcome tracking, and concurrency.
+
+        Processes URLs in batches of _EXTRACTION_CONCURRENCY using asyncio.gather.
+        Each URL gets its own circuit-breaker-wrapped extract() call, enabling
+        per-URL outcome recording and source URL tagging.
 
         Args:
             extractor: Extractor instance
             urls: List of URLs to extract from
-            domain: Domain for rate limiting (unused — arun_many handles concurrency)
+            domain: Domain for circuit breaker tracking
             job_id: Job identifier for progress tracking
-            batch_size: Number of URLs per batch (default 50)
+            tracker: ExtractionTracker for outcome recording
 
         Returns:
             List of raw product dicts from all URLs
         """
         total = len(urls)
         all_products: list[dict] = []
-        processed = 0
 
-        for i in range(0, total, batch_size):
-            batch = urls[i : i + batch_size]
-            products = await extractor.extract_batch(batch)
-            all_products.extend(products)
-            processed += len(batch)
+        async def _extract_one(url: str) -> list[dict]:
+            try:
+                async def fn():
+                    return await extractor.extract(url)
 
+                products = await self.circuit_breaker.call(domain, fn)
+                if products:
+                    ExtractionTracker.tag_products_with_source(products, url)
+                    tracker.record_success(url, len(products))
+                    return products
+
+                # Empty result — validate whether URL is actually a product page
+                html = await self._fetch_html(url)
+                if html:
+                    validation = self.page_validator.validate(html, url)
+                    if not validation.is_product_page:
+                        tracker.record_not_product(url)
+                        return []
+
+                tracker.record_empty(url)
+                return []
+            except Exception as e:
+                logger.error("Extraction failed for %s: %s", url, e)
+                tracker.record_error(url, str(e))
+                return []
+
+        for i in range(0, total, _EXTRACTION_CONCURRENCY):
+            batch = urls[i : i + _EXTRACTION_CONCURRENCY]
+            results = await asyncio.gather(*[_extract_one(u) for u in batch])
+            for products in results:
+                all_products.extend(products)
+
+            processed = min(i + len(batch), total)
             await self.progress.update(
                 job_id=job_id,
                 processed=processed,
@@ -613,3 +747,97 @@ class Pipeline:
             )
 
         return all_products
+
+    async def _targeted_reextract(
+        self,
+        raw_products: list[dict],
+        plan,
+        shop_url: str,
+    ) -> list[dict]:
+        """Re-extract missing fields from specific URLs using targeted extractors.
+
+        - Missing price → try SchemaOrgExtractor
+        - Missing image → try OpenGraphExtractor
+
+        Merges filled fields back into the original products without overwriting.
+        Capped at _MAX_REEXTRACTION_URLS (enforced by caller).
+
+        Args:
+            raw_products: Original product list (mutated in place)
+            plan: ReextractionPlan from CompletenessChecker
+            shop_url: Domain for circuit breaker
+
+        Returns:
+            Same product list with gaps filled where possible
+        """
+        url_to_indices: dict[str, list[int]] = {}
+        for i, product in enumerate(raw_products):
+            src = product.get(SOURCE_URL_KEY, "")
+            if src:
+                url_to_indices.setdefault(src, []).append(i)
+
+        async def _reextract_url(extractor, url: str) -> tuple[str, list[dict]]:
+            # _extract_with_circuit_breaker already swallows exceptions → returns []
+            supplement = await self._extract_with_circuit_breaker(
+                extractor, url, shop_url
+            )
+            return url, supplement
+
+        # Concurrent re-extraction for missing prices via Schema.org
+        if plan.urls_needing_price:
+            schema_extractor = SchemaOrgExtractor()
+            results = await asyncio.gather(
+                *[_reextract_url(schema_extractor, u) for u in plan.urls_needing_price]
+            )
+            for url, supplement in results:
+                if supplement:
+                    self._fill_missing_fields(
+                        raw_products, url_to_indices.get(url, []), supplement
+                    )
+
+        # Concurrent re-extraction for missing images via OpenGraph
+        if plan.urls_needing_image:
+            og_extractor = OpenGraphExtractor()
+            results = await asyncio.gather(
+                *[_reextract_url(og_extractor, u) for u in plan.urls_needing_image]
+            )
+            for url, supplement in results:
+                if supplement:
+                    self._fill_missing_fields(
+                        raw_products, url_to_indices.get(url, []), supplement
+                    )
+
+        return raw_products
+
+    @staticmethod
+    def _fill_missing_fields(
+        products: list[dict],
+        indices: list[int],
+        supplement: list[dict],
+    ) -> None:
+        """Fill empty/missing fields in products at given indices from supplement data.
+
+        Same merge logic as _merge_tier_fields but targeted to specific products
+        and skips private (_-prefixed) keys. Never overwrites existing non-empty values.
+        """
+        if not supplement or not indices:
+            return
+
+        merged: dict[str, object] = {}
+        for supp in supplement:
+            for key, val in supp.items():
+                if key in merged or key.startswith("_"):
+                    continue
+                if Pipeline._is_value_present(val):
+                    merged[key] = val
+
+        if not merged:
+            return
+
+        for idx in indices:
+            if idx >= len(products):
+                continue
+            product = products[idx]
+            for key, val in merged.items():
+                if not Pipeline._is_value_present(product.get(key)):
+                    product[key] = val

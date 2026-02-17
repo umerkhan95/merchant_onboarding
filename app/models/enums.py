@@ -22,6 +22,7 @@ class JobStatus(StrEnum):
     DETECTING = "detecting"
     DISCOVERING = "discovering"
     EXTRACTING = "extracting"
+    VERIFYING = "verifying"
     NORMALIZING = "normalizing"
     INGESTING = "ingesting"
     COMPLETED = "completed"
