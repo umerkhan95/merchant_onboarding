@@ -980,8 +980,11 @@ class Pipeline:
     ) -> list[dict]:
         """Re-extract missing fields from specific URLs using targeted extractors.
 
-        - Missing price -> try SchemaOrgExtractor
+        - Missing price -> try SchemaOrgExtractor, then browser CSS as fallback
         - Missing image -> try OpenGraphExtractor
+
+        The browser CSS fallback uses wait_until="networkidle" to capture
+        JS-rendered prices (e.g. WooCommerce sites that populate prices via AJAX).
 
         Merges filled fields back into the original products without overwriting.
         Capped at _MAX_REEXTRACTION_URLS (enforced by caller).
@@ -1022,6 +1025,21 @@ class Pipeline:
                         raw_products, url_to_indices.get(url, []), supplement
                     )
 
+            # Browser CSS fallback for URLs still missing prices after Schema.org.
+            # Captures JS-rendered prices (e.g. WooCommerce sites that populate
+            # prices via AJAX after initial page load).
+            still_needing_price = self._urls_still_missing_price(
+                raw_products, plan.urls_needing_price, url_to_indices
+            )
+            if still_needing_price:
+                logger.info(
+                    "Browser CSS fallback: %d URLs still missing price after Schema.org",
+                    len(still_needing_price),
+                )
+                await self._browser_price_reextract(
+                    raw_products, still_needing_price, url_to_indices, shop_url
+                )
+
         # Concurrent re-extraction for missing images via OpenGraph
         if plan.urls_needing_image:
             og_extractor = OpenGraphExtractor(client=self._http_client)
@@ -1035,6 +1053,84 @@ class Pipeline:
                     )
 
         return raw_products
+
+    @staticmethod
+    def _urls_still_missing_price(
+        products: list[dict],
+        candidate_urls: list[str],
+        url_to_indices: dict[str, list[int]],
+    ) -> list[str]:
+        """Return URLs whose products still have no valid price after Schema.org re-extraction."""
+        price_fields = ("price", "og:price:amount", "offers")
+        still_missing: list[str] = []
+        for url in candidate_urls:
+            indices = url_to_indices.get(url, [])
+            if not indices:
+                continue
+            # If ALL products for this URL are still missing a price, include it
+            all_missing = True
+            for idx in indices:
+                if idx >= len(products):
+                    continue
+                product = products[idx]
+                for field_name in price_fields:
+                    val = product.get(field_name)
+                    if val is not None:
+                        if isinstance(val, dict):
+                            inner = val.get("price")
+                            if inner is not None:
+                                try:
+                                    if float(inner) != 0:
+                                        all_missing = False
+                                        break
+                                except (ValueError, TypeError):
+                                    pass
+                        elif isinstance(val, (int, float)):
+                            if val != 0:
+                                all_missing = False
+                                break
+                        elif isinstance(val, str):
+                            try:
+                                if float(val.strip().replace(",", ".")) != 0:
+                                    all_missing = False
+                                    break
+                            except ValueError:
+                                pass
+                if not all_missing:
+                    break
+            if all_missing:
+                still_missing.append(url)
+        return still_missing
+
+    async def _browser_price_reextract(
+        self,
+        raw_products: list[dict],
+        urls: list[str],
+        url_to_indices: dict[str, list[int]],
+        shop_url: str,
+    ) -> None:
+        """Re-extract prices using browser-rendered CSS extraction.
+
+        Uses WooCommerce price selectors with wait_until="networkidle" to
+        capture JS-rendered prices. Falls back gracefully if browser extraction
+        fails or returns no data.
+        """
+        from app.extractors.schemas.woocommerce import WOOCOMMERCE_SCHEMA
+
+        # Create a price-focused CSS extractor with networkidle wait
+        css_extractor = CSSExtractor(WOOCOMMERCE_SCHEMA)
+
+        for url in urls:
+            try:
+                result = await css_extractor.extract(url)
+                supplement = result.products
+            except Exception:
+                supplement = []
+
+            if supplement:
+                self._fill_missing_fields(
+                    raw_products, url_to_indices.get(url, []), supplement
+                )
 
     @staticmethod
     def _fill_missing_fields(

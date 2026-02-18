@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.extractors.base import ExtractorResult
+from app.extractors.css_extractor import CSSExtractor
 from app.models.enums import JobStatus, Platform
 from app.services.pipeline import Pipeline
 from app.services.platform_detector import PlatformResult
@@ -1674,3 +1675,197 @@ async def test_normalization_drop_rate_error_logged_above_50_percent(
                 # Error log about >50% drop rate should be present
                 errors = [r.message for r in caplog.records if r.levelname == "ERROR"]
                 assert any("50%" in e or "mismatch" in e.lower() or "drop" in e.lower() for e in errors)
+
+
+# ── _urls_still_missing_price tests ──────────────────────────────────────
+
+
+class TestUrlsStillMissingPrice:
+    """Tests for Pipeline._urls_still_missing_price."""
+
+    def test_all_prices_filled(self):
+        """URLs where products have valid prices are excluded."""
+        products = [
+            {"_source_url": "https://shop.com/a", "price": "19.99"},
+            {"_source_url": "https://shop.com/b", "price": "29.99"},
+        ]
+        url_to_idx = {"https://shop.com/a": [0], "https://shop.com/b": [1]}
+        result = Pipeline._urls_still_missing_price(
+            products, ["https://shop.com/a", "https://shop.com/b"], url_to_idx
+        )
+        assert result == []
+
+    def test_zero_price_still_missing(self):
+        """Products with price=0 are treated as missing."""
+        products = [
+            {"_source_url": "https://shop.com/a", "price": "0"},
+        ]
+        url_to_idx = {"https://shop.com/a": [0]}
+        result = Pipeline._urls_still_missing_price(
+            products, ["https://shop.com/a"], url_to_idx
+        )
+        assert result == ["https://shop.com/a"]
+
+    def test_no_price_field_missing(self):
+        """Products without any price field are treated as missing."""
+        products = [
+            {"_source_url": "https://shop.com/a", "title": "No Price Product"},
+        ]
+        url_to_idx = {"https://shop.com/a": [0]}
+        result = Pipeline._urls_still_missing_price(
+            products, ["https://shop.com/a"], url_to_idx
+        )
+        assert result == ["https://shop.com/a"]
+
+    def test_offers_dict_with_zero_price(self):
+        """Products with offers.price=0 are treated as missing."""
+        products = [
+            {"_source_url": "https://shop.com/a", "offers": {"price": "0.00"}},
+        ]
+        url_to_idx = {"https://shop.com/a": [0]}
+        result = Pipeline._urls_still_missing_price(
+            products, ["https://shop.com/a"], url_to_idx
+        )
+        assert result == ["https://shop.com/a"]
+
+    def test_offers_dict_with_valid_price(self):
+        """Products with offers.price>0 are not missing."""
+        products = [
+            {"_source_url": "https://shop.com/a", "offers": {"price": "14.50"}},
+        ]
+        url_to_idx = {"https://shop.com/a": [0]}
+        result = Pipeline._urls_still_missing_price(
+            products, ["https://shop.com/a"], url_to_idx
+        )
+        assert result == []
+
+    def test_mixed_urls(self):
+        """Only URLs still missing prices are returned."""
+        products = [
+            {"_source_url": "https://shop.com/a", "price": "19.99"},
+            {"_source_url": "https://shop.com/b", "price": "0"},
+            {"_source_url": "https://shop.com/c", "title": "No price at all"},
+        ]
+        url_to_idx = {
+            "https://shop.com/a": [0],
+            "https://shop.com/b": [1],
+            "https://shop.com/c": [2],
+        }
+        result = Pipeline._urls_still_missing_price(
+            products,
+            ["https://shop.com/a", "https://shop.com/b", "https://shop.com/c"],
+            url_to_idx,
+        )
+        assert "https://shop.com/a" not in result
+        assert "https://shop.com/b" in result
+        assert "https://shop.com/c" in result
+
+    def test_numeric_price_zero(self):
+        """Numeric 0 price is treated as missing."""
+        products = [
+            {"_source_url": "https://shop.com/a", "price": 0},
+        ]
+        url_to_idx = {"https://shop.com/a": [0]}
+        result = Pipeline._urls_still_missing_price(
+            products, ["https://shop.com/a"], url_to_idx
+        )
+        assert result == ["https://shop.com/a"]
+
+    def test_numeric_price_nonzero(self):
+        """Numeric non-zero price is not missing."""
+        products = [
+            {"_source_url": "https://shop.com/a", "price": 12.50},
+        ]
+        url_to_idx = {"https://shop.com/a": [0]}
+        result = Pipeline._urls_still_missing_price(
+            products, ["https://shop.com/a"], url_to_idx
+        )
+        assert result == []
+
+    def test_empty_candidate_urls(self):
+        """Empty candidate list returns empty."""
+        assert Pipeline._urls_still_missing_price([], [], {}) == []
+
+
+# ── _browser_price_reextract tests ───────────────────────────────────────
+
+
+class TestBrowserPriceReextract:
+    """Tests for Pipeline._browser_price_reextract."""
+
+    @pytest.fixture
+    def pipeline(self, mock_progress_tracker, mock_circuit_breaker, mock_rate_limiter):
+        return Pipeline(
+            progress_tracker=mock_progress_tracker,
+            circuit_breaker=mock_circuit_breaker,
+            rate_limiter=mock_rate_limiter,
+        )
+
+    async def test_fills_missing_price_from_browser(self, pipeline):
+        """Browser CSS extraction fills missing price field."""
+        products = [
+            {"_source_url": "https://shop.com/a", "title": "Tea"},
+        ]
+        url_to_indices = {"https://shop.com/a": [0]}
+
+        mock_result = ExtractorResult(
+            products=[{"price": "$4.99", "title": "Tea"}]
+        )
+
+        with patch.object(CSSExtractor, "extract", new_callable=AsyncMock, return_value=mock_result):
+            await pipeline._browser_price_reextract(
+                products, ["https://shop.com/a"], url_to_indices, "https://shop.com"
+            )
+
+        assert products[0]["price"] == "$4.99"
+
+    async def test_does_not_overwrite_existing_title(self, pipeline):
+        """Browser CSS extraction does not overwrite existing non-empty fields."""
+        products = [
+            {"_source_url": "https://shop.com/a", "title": "My Tea"},
+        ]
+        url_to_indices = {"https://shop.com/a": [0]}
+
+        mock_result = ExtractorResult(
+            products=[{"price": "$4.99", "title": "Different Tea"}]
+        )
+
+        with patch.object(CSSExtractor, "extract", new_callable=AsyncMock, return_value=mock_result):
+            await pipeline._browser_price_reextract(
+                products, ["https://shop.com/a"], url_to_indices, "https://shop.com"
+            )
+
+        # Price filled, but title was NOT overwritten (it had a truthy value)
+        assert products[0]["price"] == "$4.99"
+        assert products[0]["title"] == "My Tea"
+
+    async def test_handles_extraction_failure(self, pipeline):
+        """Browser CSS extraction failure does not crash — products unchanged."""
+        products = [
+            {"_source_url": "https://shop.com/a", "title": "Tea"},
+        ]
+        url_to_indices = {"https://shop.com/a": [0]}
+
+        with patch.object(CSSExtractor, "extract", new_callable=AsyncMock, side_effect=Exception("Browser crashed")):
+            await pipeline._browser_price_reextract(
+                products, ["https://shop.com/a"], url_to_indices, "https://shop.com"
+            )
+
+        # Product unchanged — no crash
+        assert "price" not in products[0]
+
+    async def test_handles_empty_result(self, pipeline):
+        """Browser CSS extraction returning empty products does not crash."""
+        products = [
+            {"_source_url": "https://shop.com/a", "title": "Tea"},
+        ]
+        url_to_indices = {"https://shop.com/a": [0]}
+
+        mock_result = ExtractorResult(products=[])
+
+        with patch.object(CSSExtractor, "extract", new_callable=AsyncMock, return_value=mock_result):
+            await pipeline._browser_price_reextract(
+                products, ["https://shop.com/a"], url_to_indices, "https://shop.com"
+            )
+
+        assert "price" not in products[0]
