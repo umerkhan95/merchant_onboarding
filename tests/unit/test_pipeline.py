@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -228,7 +229,7 @@ async def test_pipeline_detection_failure(pipeline, mock_progress_tracker):
 
 @pytest.mark.asyncio
 async def test_pipeline_extraction_failure(pipeline, mock_progress_tracker):
-    """Test pipeline handles extraction failure — 0 products triggers needs_review."""
+    """Test pipeline handles extraction failure — exception propagates and marks FAILED."""
     with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
         mock_detect.return_value = PlatformResult(
             platform=Platform.SHOPIFY,
@@ -244,17 +245,14 @@ async def test_pipeline_extraction_failure(pipeline, mock_progress_tracker):
                 mock_extractor.extract = AsyncMock(side_effect=Exception("Extraction failed"))
                 mock_extractor_class.return_value = mock_extractor
 
-                # Circuit breaker catches error → 0 products → validation fails → needs_review
-                result = await pipeline.run("job-error", "https://example.com")
+                # Non-CircuitOpenError exceptions now propagate (not swallowed)
+                with pytest.raises(Exception, match="Extraction failed"):
+                    await pipeline.run("job-error", "https://example.com")
 
-                assert result["total_extracted"] == 0
-                assert result["total_normalized"] == 0
-                assert result["needs_review"] is True
-                assert result["review_reason"] == "zero_products"
-
-                # Status should be NEEDS_REVIEW, not COMPLETED
+                # Status should be FAILED
                 last_call = mock_progress_tracker.update.call_args_list[-1]
-                assert last_call[1]["status"] == JobStatus.NEEDS_REVIEW
+                assert last_call[1]["status"] == JobStatus.FAILED
+                assert "Extraction failed" in last_call[1]["error"]
 
 
 @pytest.mark.asyncio
@@ -1291,3 +1289,369 @@ async def test_pipeline_shopify_fallback_triggers_supplementation(
                     assert result["platform"] == "shopify"
                     assert result["extraction_tier"] == "schema_org"
                     assert result["total_normalized"] == 2
+
+
+# ── Issue #66: CircuitOpenError handling ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_circuit_open_error_returns_empty_not_raises(pipeline, mock_progress_tracker):
+    """CircuitOpenError in _extract_with_circuit_breaker logs WARNING and returns []."""
+    from app.exceptions.errors import CircuitOpenError
+
+    extractor = AsyncMock()
+    extractor.extract = AsyncMock(return_value=[{"title": "x"}])
+
+    # Make circuit_breaker.call raise CircuitOpenError
+    pipeline.circuit_breaker.call = AsyncMock(
+        side_effect=CircuitOpenError("example.com")
+    )
+
+    result = await pipeline._extract_with_circuit_breaker(
+        extractor, "https://example.com/product", "example.com"
+    )
+
+    # Must return [] without propagating the exception
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_circuit_open_error_logged_at_warning_not_error(
+    pipeline, mock_progress_tracker, caplog
+):
+    """CircuitOpenError must be logged at WARNING level, not ERROR."""
+    import logging
+    from app.exceptions.errors import CircuitOpenError
+
+    caplog.set_level(logging.WARNING)
+
+    extractor = AsyncMock()
+    pipeline.circuit_breaker.call = AsyncMock(
+        side_effect=CircuitOpenError("example.com")
+    )
+
+    await pipeline._extract_with_circuit_breaker(
+        extractor, "https://example.com/product", "example.com"
+    )
+
+    # Should be WARNING, not ERROR
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert any("Circuit breaker OPEN" in r.message or "Circuit" in r.message for r in warnings)
+    assert not any("Circuit breaker OPEN" in r.message for r in errors)
+
+
+@pytest.mark.asyncio
+async def test_non_circuit_error_propagates_from_extract_with_circuit_breaker(pipeline):
+    """Non-CircuitOpenError exceptions should propagate from _extract_with_circuit_breaker."""
+    extractor = AsyncMock()
+
+    async def call_passthrough(domain, coro):
+        return await coro()
+
+    pipeline.circuit_breaker.call = AsyncMock(side_effect=call_passthrough)
+    extractor.extract = AsyncMock(side_effect=ValueError("bad extractor"))
+
+    with pytest.raises(ValueError, match="bad extractor"):
+        await pipeline._extract_with_circuit_breaker(
+            extractor, "https://example.com/product", "example.com"
+        )
+
+
+@pytest.mark.asyncio
+async def test_circuit_open_in_tracked_extraction_counts_as_skip_not_error(
+    pipeline, mock_progress_tracker
+):
+    """CircuitOpenError in _extract_from_urls_tracked is a skip, not recorded as error."""
+    from app.exceptions.errors import CircuitOpenError
+    from app.services.extraction_tracker import ExtractionTracker
+
+    tracker = ExtractionTracker()
+    extractor = AsyncMock()
+
+    # All circuit_breaker.call raises CircuitOpenError
+    pipeline.circuit_breaker.call = AsyncMock(
+        side_effect=CircuitOpenError("example.com")
+    )
+
+    urls = [f"https://example.com/product-{i}" for i in range(3)]
+    result = await pipeline._extract_from_urls_tracked(
+        extractor, urls, "example.com", "job-123", tracker
+    )
+
+    # Returns empty (skipped), not error
+    assert result == []
+
+    # ExtractionTracker should have 0 error records (circuit-open = skip)
+    audit = tracker.build_audit()
+    assert audit.urls_errored == 0
+
+
+# ── Issue #67: Catastrophic error rate detection ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_catastrophic_error_rate_raises_extraction_error(
+    pipeline, mock_progress_tracker
+):
+    """_extract_from_urls_tracked raises ExtractionError when >80% of URLs fail."""
+    from app.exceptions.errors import ExtractionError
+    from app.services.extraction_tracker import ExtractionTracker
+
+    tracker = ExtractionTracker()
+    extractor = AsyncMock()
+
+    async def passthrough(domain, coro):
+        return await coro()
+
+    pipeline.circuit_breaker.call = AsyncMock(side_effect=passthrough)
+    # All extractions fail with an exception
+    extractor.extract = AsyncMock(side_effect=RuntimeError("Connection refused"))
+
+    # 9 URLs -- all fail => 100% error rate > 80%
+    urls = [f"https://example.com/product-{i}" for i in range(9)]
+
+    with pytest.raises(ExtractionError, match="Catastrophic error rate"):
+        await pipeline._extract_from_urls_tracked(
+            extractor, urls, "example.com", "job-123", tracker
+        )
+
+
+@pytest.mark.asyncio
+async def test_catastrophic_error_rate_not_raised_below_threshold(
+    pipeline, mock_progress_tracker
+):
+    """Error rate <= 80% does not raise ExtractionError."""
+    from app.exceptions.errors import ExtractionError
+    from app.services.extraction_tracker import ExtractionTracker
+
+    tracker = ExtractionTracker()
+    extractor = AsyncMock()
+
+    call_count = 0
+
+    async def passthrough(domain, coro):
+        return await coro()
+
+    pipeline.circuit_breaker.call = AsyncMock(side_effect=passthrough)
+
+    async def partial_fail(url):
+        nonlocal call_count
+        call_count += 1
+        # 4 out of 10 fail (~40% error rate)
+        if call_count <= 4:
+            raise RuntimeError("fail")
+        return [{"title": "ok", "offers": {"price": "10"}}]
+
+    extractor.extract = AsyncMock(side_effect=partial_fail)
+
+    urls = [f"https://example.com/product-{i}" for i in range(10)]
+
+    # Should not raise ExtractionError
+    result = await pipeline._extract_from_urls_tracked(
+        extractor, urls, "example.com", "job-123", tracker
+    )
+    # 6 successful extractions, each returning 1 product
+    assert len(result) == 6
+
+
+@pytest.mark.asyncio
+async def test_catastrophic_error_rate_not_raised_with_5_or_fewer_urls(
+    pipeline, mock_progress_tracker
+):
+    """With 5 or fewer URLs, error rate check is not applied (insufficient sample)."""
+    from app.exceptions.errors import ExtractionError
+    from app.services.extraction_tracker import ExtractionTracker
+
+    tracker = ExtractionTracker()
+    extractor = AsyncMock()
+
+    async def passthrough(domain, coro):
+        return await coro()
+
+    pipeline.circuit_breaker.call = AsyncMock(side_effect=passthrough)
+    extractor.extract = AsyncMock(side_effect=RuntimeError("fail"))
+
+    # Only 5 URLs -- all fail but check requires >5 to trigger
+    urls = [f"https://example.com/product-{i}" for i in range(5)]
+
+    # Should NOT raise even with 100% failure rate
+    result = await pipeline._extract_from_urls_tracked(
+        extractor, urls, "example.com", "job-123", tracker
+    )
+    assert result == []
+
+
+# ── Timeout preserves progress counts ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_timeout_preserves_existing_progress_counts(pipeline, mock_progress_tracker):
+    """On pipeline timeout, progress update uses actual processed/total from Redis."""
+    # Mock progress.get to return existing progress state
+    mock_progress_tracker.get = AsyncMock(
+        return_value={"processed": 42, "total": 100}
+    )
+
+    async def slow_inner(job_id, shop_url):
+        await asyncio.sleep(999)
+
+    pipeline._run_inner = slow_inner
+
+    with pytest.raises(asyncio.TimeoutError):
+        await pipeline.run("job-timeout", "https://example.com", timeout=0.01)
+
+    # Find the FAILED status update call
+    failed_calls = [
+        call for call in mock_progress_tracker.update.call_args_list
+        if call[1].get("status") == JobStatus.FAILED
+    ]
+    assert failed_calls, "Expected a FAILED status update"
+
+    failed_call = failed_calls[-1]
+    # Progress counts should be preserved from Redis, not reset to 0
+    assert failed_call[1]["processed"] == 42
+    assert failed_call[1]["total"] == 100
+    assert "timed out" in failed_call[1]["current_step"].lower()
+
+
+@pytest.mark.asyncio
+async def test_timeout_uses_zero_counts_when_no_prior_progress(pipeline, mock_progress_tracker):
+    """On timeout with no prior progress data (get returns None), defaults to 0."""
+    mock_progress_tracker.get = AsyncMock(return_value=None)
+
+    async def slow_inner(job_id, shop_url):
+        await asyncio.sleep(999)
+
+    pipeline._run_inner = slow_inner
+
+    with pytest.raises(asyncio.TimeoutError):
+        await pipeline.run("job-timeout-no-prior", "https://example.com", timeout=0.01)
+
+    failed_calls = [
+        call for call in mock_progress_tracker.update.call_args_list
+        if call[1].get("status") == JobStatus.FAILED
+    ]
+    assert failed_calls
+    failed_call = failed_calls[-1]
+    assert failed_call[1]["processed"] == 0
+    assert failed_call[1]["total"] == 0
+
+
+# ── Normalization drop rate logging ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_normalization_drop_rate_warning_logged(pipeline, mock_progress_tracker, caplog):
+    """Warning is logged when normalization drops products."""
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = MagicMock(
+            platform=Platform.SHOPIFY,
+            confidence=0.9,
+            signals=["api:/products.json"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = ["https://example.com/products.json"]
+
+            with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_shopify_class:
+                # Return 5 raw products
+                raw = [
+                    {"id": i, "title": f"Product {i}", "handle": f"prod-{i}",
+                     "variants": [{"price": "10"}]}
+                    for i in range(5)
+                ]
+                mock_shopify = AsyncMock()
+                mock_shopify.extract = AsyncMock(return_value=raw)
+                mock_shopify_class.return_value = mock_shopify
+
+                # Normalizer drops all but 1 (80% drop rate > 50%)
+                original_normalize = pipeline.normalizer.normalize
+                call_idx = 0
+
+                def drop_most(raw, shop_id, platform, shop_url):
+                    nonlocal call_idx
+                    call_idx += 1
+                    # Return None for 4 out of 5 products (drop 80%)
+                    if call_idx > 1:
+                        return None
+                    return original_normalize(raw, shop_id=shop_id, platform=platform, shop_url=shop_url)
+
+                pipeline.normalizer.normalize = drop_most
+
+                await pipeline.run("job-drop-rate", "https://example.com")
+
+                # Warning about drop rate should be logged
+                warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+                assert any("drop" in w.lower() or "dropped" in w.lower() for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_normalization_drop_rate_error_logged_above_50_percent(
+    pipeline, mock_progress_tracker, caplog
+):
+    """Error is logged when normalization drop rate exceeds 50%."""
+    import logging
+    caplog.set_level(logging.ERROR)
+
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = MagicMock(
+            platform=Platform.SHOPIFY,
+            confidence=0.9,
+            signals=["api:/products.json"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = ["https://example.com/products.json"]
+
+            with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_shopify_class:
+                raw = [
+                    {"id": i, "title": f"Product {i}", "handle": f"prod-{i}",
+                     "variants": [{"price": "10"}]}
+                    for i in range(10)
+                ]
+                mock_shopify = AsyncMock()
+                mock_shopify.extract = AsyncMock(return_value=raw)
+                mock_shopify_class.return_value = mock_shopify
+
+                # Normalizer drops 9 out of 10 (90% drop rate)
+                call_idx = 0
+
+                def drop_most(raw, shop_id, platform, shop_url):
+                    nonlocal call_idx
+                    call_idx += 1
+                    if call_idx > 1:
+                        return None
+                    from app.models.product import Product
+                    from app.models.enums import Platform as PlatformEnum
+                    from decimal import Decimal
+                    from datetime import datetime, timezone
+                    import hashlib, json
+                    return Product(
+                        external_id=str(raw.get("id", "1")),
+                        shop_id=shop_id,
+                        platform=platform,
+                        title=raw.get("title", "Test"),
+                        description="test",
+                        price=Decimal("10.00"),
+                        currency="USD",
+                        image_url="https://example.com/img.jpg",
+                        product_url="https://example.com/product",
+                        in_stock=True,
+                        variants=[],
+                        tags=[],
+                        raw_data=raw,
+                        scraped_at=datetime.now(timezone.utc),
+                        idempotency_key=hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest(),
+                    )
+
+                pipeline.normalizer.normalize = drop_most
+
+                await pipeline.run("job-high-drop", "https://example.com")
+
+                # Error log about >50% drop rate should be present
+                errors = [r.message for r in caplog.records if r.levelname == "ERROR"]
+                assert any("50%" in e or "mismatch" in e.lower() or "drop" in e.lower() for e in errors)

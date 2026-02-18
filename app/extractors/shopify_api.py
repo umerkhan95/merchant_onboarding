@@ -113,7 +113,12 @@ class ShopifyAPIExtractor(BaseExtractor):
                     page += 1
 
                 except httpx.TimeoutException:
-                    logger.error(f"Timeout on page {page}, returning what we have")
+                    logger.warning(
+                        "Timeout on page %d, returning %d products from %d pages (may be incomplete)",
+                        page,
+                        len(all_products),
+                        page - 1,
+                    )
                     break
                 except httpx.RequestError as e:
                     logger.error(f"Request error on page {page}: {e}, returning what we have")

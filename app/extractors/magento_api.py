@@ -16,15 +16,17 @@ logger = logging.getLogger(__name__)
 class MagentoAPIExtractor(BaseExtractor):
     """Extract products from Magento 2 stores using the REST API endpoint."""
 
-    def __init__(self, timeout: int = 30, page_size: int = 100):
+    def __init__(self, timeout: int = 30, page_size: int = 100, max_pages: int = 100):
         """Initialize the Magento API extractor.
 
         Args:
             timeout: HTTP request timeout in seconds (default: 30)
             page_size: Number of products per page (default: 100)
+            max_pages: Maximum number of pages to fetch (default: 100)
         """
         self.timeout = timeout
         self.page_size = page_size
+        self.max_pages = max_pages
 
     async def extract(self, shop_url: str) -> list[dict]:
         """Fetch all products from Magento 2 REST API with pagination.
@@ -47,7 +49,7 @@ class MagentoAPIExtractor(BaseExtractor):
         }
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
-            while True:
+            while current_page <= self.max_pages:
                 url = (
                     f"{base_url}/rest/V1/products?"
                     f"searchCriteria[pageSize]={self.page_size}&"
@@ -113,7 +115,12 @@ class MagentoAPIExtractor(BaseExtractor):
                     current_page += 1
 
                 except httpx.TimeoutException:
-                    logger.error(f"Timeout on page {current_page}, returning what we have")
+                    logger.warning(
+                        "Timeout on page %d, returning %d products from %d pages (may be incomplete)",
+                        current_page,
+                        len(all_products),
+                        current_page - 1,
+                    )
                     break
                 except httpx.RequestError as e:
                     logger.error(f"Request error on page {current_page}: {e}, returning what we have")
@@ -121,6 +128,13 @@ class MagentoAPIExtractor(BaseExtractor):
                 except Exception as e:
                     logger.error(f"Unexpected error on page {current_page}: {e}, returning what we have")
                     break
+
+        if current_page > self.max_pages:
+            logger.warning(
+                "Reached max_pages limit (%d), stopping pagination with %d products (may be incomplete)",
+                self.max_pages,
+                len(all_products),
+            )
 
         logger.info(
             f"Extraction complete: {len(all_products)} total products from {current_page} pages"

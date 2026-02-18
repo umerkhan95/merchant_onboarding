@@ -300,3 +300,43 @@ async def test_trailing_slash_handling(extractor: ShopifyAPIExtractor, shopify_p
         products = await extractor.extract(shop_url_with_slash)
 
         assert len(products) == 3
+
+
+@pytest.mark.asyncio
+async def test_timeout_logs_warning_with_partial_count(extractor: ShopifyAPIExtractor):
+    """Test that timeout on page N>1 logs a WARNING (not ERROR) with products-so-far context."""
+    import io
+    import logging
+    shop_url = "https://example.myshopify.com"
+
+    # First page succeeds with 250 products (full page)
+    page1_products = [{"id": i, "title": f"Product {i}", "handle": f"product-{i}",
+                       "variants": [{"price": "10"}]} for i in range(250)]
+    page1_response = {"products": page1_products}
+
+    with respx.mock:
+        respx.get(f"{shop_url}/products.json?limit=250&page=1").mock(
+            return_value=Response(200, json=page1_response)
+        )
+        respx.get(f"{shop_url}/products.json?limit=250&page=2").mock(
+            side_effect=httpx.TimeoutException("Timeout")
+        )
+
+        log_output = io.StringIO()
+        handler = logging.StreamHandler(log_output)
+        handler.setLevel(logging.WARNING)
+        shopify_logger = logging.getLogger("app.extractors.shopify_api")
+        shopify_logger.addHandler(handler)
+        try:
+            products = await extractor.extract(shop_url)
+        finally:
+            shopify_logger.removeHandler(handler)
+
+    # Should return partial results from page 1
+    assert len(products) == 250
+
+    # Log should mention the page count and product count (at WARNING level, not ERROR)
+    log_text = log_output.getvalue()
+    assert "Timeout" in log_text or "timeout" in log_text.lower()
+    assert "250" in log_text  # products count mentioned
+    assert "incomplete" in log_text.lower()  # explicitly calls out incompleteness

@@ -1,6 +1,6 @@
 """Pipeline orchestrator for merchant onboarding process.
 
-Orchestrates the complete onboarding flow: detection → discovery → extraction → normalization → ingestion.
+Orchestrates the complete onboarding flow: detection -> discovery -> extraction -> normalization -> ingestion.
 Contains NO business logic itself - only calls components in order.
 """
 
@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from app.config import MAX_RESPONSE_SIZE
+from app.exceptions.errors import CircuitOpenError, ExtractionError
 from app.extractors.base import ExtractionResult
 from app.extractors.css_extractor import CSSExtractor
 from app.extractors.magento_api import MagentoAPIExtractor
@@ -94,7 +96,7 @@ class Pipeline:
     async def run(
         self, job_id: str, shop_url: str, timeout: int = _PIPELINE_TIMEOUT_SECONDS
     ) -> dict:
-        """Run the full pipeline: detect → discover → extract → normalize → ingest.
+        """Run the full pipeline: detect -> discover -> extract -> normalize -> ingest.
 
         Args:
             job_id: Unique job identifier for progress tracking
@@ -110,12 +112,13 @@ class Pipeline:
             )
         except asyncio.TimeoutError:
             logger.error("Pipeline timed out after %ds for job %s", timeout, job_id)
+            current_progress = await self.progress.get(job_id)
             await self.progress.update(
                 job_id=job_id,
-                processed=0,
-                total=0,
+                processed=current_progress.get("processed", 0) if current_progress else 0,
+                total=current_progress.get("total", 0) if current_progress else 0,
                 status=JobStatus.FAILED,
-                current_step="Pipeline failed",
+                current_step="Pipeline timed out",
                 error=f"Pipeline timed out after {timeout // 60} minutes",
             )
             raise
@@ -166,7 +169,7 @@ class Pipeline:
                     processed=0,
                     total=0,
                     status=JobStatus.NEEDS_REVIEW,
-                    current_step="No product URLs discovered — needs manual review",
+                    current_step="No product URLs discovered -- needs manual review",
                 )
                 return {
                     "platform": platform.value,
@@ -199,7 +202,7 @@ class Pipeline:
             validation = self.validator.validate(extraction_result)
             if not validation:
                 logger.warning(
-                    f"Extraction validation failed for {shop_url}: {validation.reason} — {validation.message}"
+                    f"Extraction validation failed for {shop_url}: {validation.reason} -- {validation.message}"
                 )
                 await self.progress.update(
                     job_id=job_id,
@@ -276,6 +279,22 @@ class Pipeline:
                     )
 
             logger.info(f"Normalized {len(normalized_products)} products")
+
+            # Log normalization drop rate if products were lost
+            if raw_products:
+                dropped = len(raw_products) - len(normalized_products)
+                if dropped > 0:
+                    drop_rate = dropped / len(raw_products) * 100
+                    logger.warning(
+                        "Normalization dropped %d/%d products (%.1f%%)",
+                        dropped,
+                        len(raw_products),
+                        drop_rate,
+                    )
+                    if drop_rate > 50:
+                        logger.error(
+                            "Normalization drop rate >50%% -- possible extractor/normalizer mismatch"
+                        )
 
             # Step 4b: Reconciliation report
             audit = extraction_result.audit
@@ -533,7 +552,7 @@ class Pipeline:
             if smart_products:
                 partial_probes.extend(smart_products)
         else:
-            logger.warning("SmartCSS extractor not configured — skipping Tier 4")
+            logger.warning("SmartCSS extractor not configured -- skipping Tier 4")
 
         # Tier 5: LLM extraction (universal fallback, if configured)
         if self.llm_extractor:
@@ -548,7 +567,7 @@ class Pipeline:
                     products = self._merge_tier_fields(products, partial_probes)
                 return products, ExtractionTier.LLM
         else:
-            logger.warning("LLM extractor not configured — skipping Tier 5")
+            logger.warning("LLM extractor not configured -- skipping Tier 5")
 
         # Fallback: hardcoded CSS (for when no tier probe was acceptable)
         schema = css_schema or GENERIC_SCHEMA
@@ -638,7 +657,7 @@ class Pipeline:
             return False
 
         logger.info(
-            "%s probe successful: %d products, quality %.2f — committing to full extraction",
+            "%s probe successful: %d products, quality %.2f -- committing to full extraction",
             tier_name, len(products), quality,
         )
         return True
@@ -647,6 +666,10 @@ class Pipeline:
         self, extractor, url: str, domain: str
     ) -> list[dict]:
         """Extract products using circuit breaker for fault tolerance.
+
+        CircuitOpenError is caught separately and treated as a silent skip
+        (logged at WARNING, returns []). Other exceptions are re-raised so the
+        caller can decide how to handle them.
 
         Args:
             extractor: Extractor instance
@@ -662,14 +685,18 @@ class Pipeline:
 
         try:
             return await self.circuit_breaker.call(domain, extract_fn)
-        except Exception as e:
-            logger.error(f"Extraction failed for {url}: {e}")
+        except CircuitOpenError:
+            logger.warning("Circuit breaker OPEN for %s, skipping %s", domain, url)
             return []
+        except Exception as e:
+            logger.error("Extraction failed for %s: %s", url, e)
+            raise
 
     async def _fetch_html(self, url: str) -> str | None:
         """Fetch raw HTML for page validation (lightweight httpx, no browser).
 
-        Returns HTML string on success, None on any failure.
+        Returns HTML string on success, None on any failure or if the response
+        exceeds MAX_RESPONSE_SIZE.
         """
         from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
 
@@ -680,7 +707,23 @@ class Pipeline:
             ) as client:
                 resp = await client.get(url)
                 if resp.status_code < 400:
-                    return resp.text
+                    content_length = int(resp.headers.get("content-length", 0))
+                    if content_length > MAX_RESPONSE_SIZE:
+                        logger.warning(
+                            "Response too large (%d bytes) from %s, skipping",
+                            content_length,
+                            url,
+                        )
+                        return None
+                    html = resp.text
+                    if len(html) > MAX_RESPONSE_SIZE:
+                        logger.warning(
+                            "Response body too large (%d chars) from %s, skipping",
+                            len(html),
+                            url,
+                        )
+                        return None
+                    return html
         except Exception as e:
             logger.debug("HTML fetch for validation failed for %s: %s", url, e)
         return None
@@ -698,6 +741,11 @@ class Pipeline:
         Processes URLs in batches of _EXTRACTION_CONCURRENCY using asyncio.gather.
         Each URL gets its own circuit-breaker-wrapped extract() call, enabling
         per-URL outcome recording and source URL tagging.
+
+        After all URLs are processed, checks for a catastrophic error rate:
+        if >80% of URLs errored (and at least 6 URLs were attempted), raises
+        ExtractionError to abort the pipeline rather than silently returning
+        an empty product list.
 
         Args:
             extractor: Extractor instance
@@ -723,7 +771,7 @@ class Pipeline:
                     tracker.record_success(url, len(products))
                     return products
 
-                # Empty result — validate whether URL is actually a product page
+                # Empty result -- validate whether URL is actually a product page
                 html = await self._fetch_html(url)
                 if html:
                     validation = self.page_validator.validate(html, url)
@@ -732,6 +780,9 @@ class Pipeline:
                         return []
 
                 tracker.record_empty(url)
+                return []
+            except CircuitOpenError:
+                logger.warning("Circuit breaker OPEN for %s, skipping %s", domain, url)
                 return []
             except Exception as e:
                 logger.error("Extraction failed for %s: %s", url, e)
@@ -753,6 +804,14 @@ class Pipeline:
                 current_step=f"Extracted {processed}/{total} URLs, got {len(all_products)} products",
             )
 
+        # Catastrophic error rate detection: abort if >80% of URLs failed
+        audit = tracker.build_audit()
+        if audit.urls_attempted > 5 and audit.urls_errored / audit.urls_attempted > 0.8:
+            error_rate = audit.urls_errored / audit.urls_attempted
+            raise ExtractionError(
+                f"Catastrophic error rate: {error_rate:.0%} of {audit.urls_attempted} URLs failed"
+            )
+
         return all_products
 
     async def _targeted_reextract(
@@ -763,8 +822,8 @@ class Pipeline:
     ) -> list[dict]:
         """Re-extract missing fields from specific URLs using targeted extractors.
 
-        - Missing price → try SchemaOrgExtractor
-        - Missing image → try OpenGraphExtractor
+        - Missing price -> try SchemaOrgExtractor
+        - Missing image -> try OpenGraphExtractor
 
         Merges filled fields back into the original products without overwriting.
         Capped at _MAX_REEXTRACTION_URLS (enforced by caller).
@@ -784,10 +843,13 @@ class Pipeline:
                 url_to_indices.setdefault(src, []).append(i)
 
         async def _reextract_url(extractor, url: str) -> tuple[str, list[dict]]:
-            # _extract_with_circuit_breaker already swallows exceptions → returns []
-            supplement = await self._extract_with_circuit_breaker(
-                extractor, url, shop_url
-            )
+            # _extract_with_circuit_breaker returns [] on CircuitOpenError, re-raises others
+            try:
+                supplement = await self._extract_with_circuit_breaker(
+                    extractor, url, shop_url
+                )
+            except Exception:
+                supplement = []
             return url, supplement
 
         # Concurrent re-extraction for missing prices via Schema.org
@@ -849,7 +911,7 @@ class Pipeline:
                 if not Pipeline._is_value_present(product.get(key)):
                     product[key] = val
 
-    # ── Shopify API price supplementation ────────────────────────────────
+    # -- Shopify API price supplementation ----------------------------------------
 
     async def _supplement_shopify_prices(
         self, raw_products: list[dict], shop_url: str
@@ -961,16 +1023,19 @@ class Pipeline:
         """Fetch products from Shopify API, trying alternative endpoints for headless stores.
 
         Headless Shopify stores (Hydrogen/custom) often block /products.json at
-        the main domain but serve it from a ``shop.`` subdomain.
+        the main domain but serve it from a shop. subdomain.
         """
         from urllib.parse import urlparse
 
         shopify_extractor = ShopifyAPIExtractor()
 
         # Try the main URL first
-        products = await self._extract_with_circuit_breaker(
-            shopify_extractor, shop_url, shop_url
-        )
+        try:
+            products = await self._extract_with_circuit_breaker(
+                shopify_extractor, shop_url, shop_url
+            )
+        except Exception:
+            products = []
         if products:
             return products
 
@@ -979,9 +1044,12 @@ class Pipeline:
         base_domain = parsed.netloc.lower().removeprefix("www.")
         alt_url = f"{parsed.scheme}://shop.{base_domain}"
 
-        products = await self._extract_with_circuit_breaker(
-            shopify_extractor, alt_url, shop_url
-        )
+        try:
+            products = await self._extract_with_circuit_breaker(
+                shopify_extractor, alt_url, shop_url
+            )
+        except Exception:
+            products = []
         if products:
             logger.info(
                 "Shopify API found at alternative endpoint %s (%d products)",

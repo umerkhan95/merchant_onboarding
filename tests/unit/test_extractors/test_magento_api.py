@@ -316,3 +316,102 @@ async def test_custom_page_size(magento_products_fixture: dict):
         products = await custom_extractor.extract(shop_url)
 
         assert len(products) == 2
+
+
+@pytest.mark.asyncio
+async def test_max_pages_guard_stops_pagination():
+    """Test that max_pages guard stops pagination at the configured limit."""
+    shop_url = "https://example.com"
+    # Use max_pages=2 so we stop after 2 pages even if total_count says more
+    limited_extractor = MagentoAPIExtractor(timeout=30, page_size=100, max_pages=2)
+
+    # Page 1: 100 products, total_count=300 (would need 3 pages normally)
+    page1_products = [{"id": i, "sku": f"PROD-{i}"} for i in range(1, 101)]
+    page1_response = {"items": page1_products, "total_count": 300}
+
+    # Page 2: 100 products
+    page2_products = [{"id": i, "sku": f"PROD-{i}"} for i in range(101, 201)]
+    page2_response = {"items": page2_products, "total_count": 300}
+
+    with respx.mock:
+        respx.get(
+            f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
+        ).mock(return_value=Response(200, json=page1_response))
+        respx.get(
+            f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=2"
+        ).mock(return_value=Response(200, json=page2_response))
+        # Page 3 should NOT be requested
+
+        products = await limited_extractor.extract(shop_url)
+
+        # Should stop at max_pages=2 with 200 products (not all 300)
+        assert len(products) == 200
+        assert products[0]["id"] == 1
+        assert products[-1]["id"] == 200
+
+
+@pytest.mark.asyncio
+async def test_max_pages_guard_logs_warning_when_limit_reached(caplog):
+    """Test that reaching max_pages limit logs a warning."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="app.extractors.magento_api")
+
+    shop_url = "https://example.com"
+    limited_extractor = MagentoAPIExtractor(timeout=30, page_size=100, max_pages=1)
+
+    # Page 1: 100 products, but total_count=200 (more pages exist)
+    page1_products = [{"id": i, "sku": f"PROD-{i}"} for i in range(1, 101)]
+    page1_response = {"items": page1_products, "total_count": 200}
+
+    with respx.mock:
+        respx.get(
+            f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
+        ).mock(return_value=Response(200, json=page1_response))
+
+        products = await limited_extractor.extract(shop_url)
+
+        # Should return only page 1 products
+        assert len(products) == 100
+
+        # Warning should be logged about hitting max_pages
+        warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any("max_pages" in w or "limit" in w.lower() for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_timeout_mid_pagination_logs_warning_with_context():
+    """Test that mid-pagination timeout logs warning with products-so-far count."""
+    shop_url = "https://example.com"
+    ext = MagentoAPIExtractor(timeout=30, page_size=100)
+
+    # Page 1 succeeds with 100 products, total_count=200
+    page1_products = [{"id": i, "sku": f"PROD-{i}"} for i in range(1, 101)]
+    page1_response = {"items": page1_products, "total_count": 200}
+
+    import logging
+
+    with respx.mock:
+        respx.get(
+            f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
+        ).mock(return_value=Response(200, json=page1_response))
+        respx.get(
+            f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=2"
+        ).mock(side_effect=httpx.TimeoutException("Timeout"))
+
+        import io
+        log_output = io.StringIO()
+        handler = logging.StreamHandler(log_output)
+        handler.setLevel(logging.WARNING)
+        logging.getLogger("app.extractors.magento_api").addHandler(handler)
+        try:
+            products = await ext.extract(shop_url)
+        finally:
+            logging.getLogger("app.extractors.magento_api").removeHandler(handler)
+
+    # Should return partial results
+    assert len(products) == 100
+
+    # Log should contain product count context (warning, not error)
+    log_text = log_output.getvalue()
+    assert "100" in log_text  # products count
+    assert "incomplete" in log_text.lower() or "timeout" in log_text.lower()
