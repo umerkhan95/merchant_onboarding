@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from app.db.queries import CREATE_PRODUCTS_TABLE
 from app.db.supabase_client import DatabaseClient
 from app.exceptions.handlers import register_exception_handlers
 from app.infra.perf_middleware import PerfMiddleware
+from app.api.deps import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +28,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup — Redis
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
-    # Startup — PostgreSQL
-    db = DatabaseClient(settings.database_url)
-    try:
-        await db.connect()
-        async with db.pool.acquire() as conn:
-            await conn.execute(CREATE_PRODUCTS_TABLE)
-        logger.info("PostgreSQL connected and products table ensured")
-    except Exception:
-        logger.warning("PostgreSQL not available — running without database", exc_info=True)
-        db = None  # type: ignore[assignment]
+    # Startup — PostgreSQL (retry up to 5 times with exponential backoff)
+    db: DatabaseClient | None = None
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            db = DatabaseClient(settings.database_url)
+            await db.connect()
+            async with db.pool.acquire() as conn:
+                await conn.execute(CREATE_PRODUCTS_TABLE)
+            logger.info("PostgreSQL connected and products table ensured")
+            break
+        except Exception:
+            if attempt < max_retries:
+                delay = min(2 ** attempt, 30)
+                logger.warning(
+                    "PostgreSQL connection attempt %d/%d failed, retrying in %ds",
+                    attempt, max_retries, delay, exc_info=True,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.warning(
+                    "PostgreSQL not available after %d attempts — running without database",
+                    max_retries, exc_info=True,
+                )
+                db = None
     app.state.db = db
 
     yield
@@ -61,6 +78,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.state.limiter = limiter
     app.add_middleware(PerfMiddleware)
     app.include_router(v1_router, prefix="/api/v1")
 

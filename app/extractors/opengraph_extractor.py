@@ -7,11 +7,12 @@ import logging
 import httpx
 from bs4 import BeautifulSoup
 
+from app.config import MAX_RESPONSE_SIZE
 from app.extractors.base import BaseExtractor
 from app.extractors.browser_config import (
     DEFAULT_HEADERS,
-    get_default_user_agent,
     fetch_html_with_browser,
+    get_default_user_agent,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,8 @@ class OpenGraphExtractor(BaseExtractor):
         Tries httpx first (fast). Falls back to browser on HTTP errors (403, timeout)
         which indicate bot protection or JS-rendered content.
 
+        Responses exceeding MAX_RESPONSE_SIZE are rejected to prevent memory exhaustion.
+
         Args:
             url: Product page URL
 
@@ -78,7 +81,22 @@ class OpenGraphExtractor(BaseExtractor):
             async with httpx.AsyncClient(follow_redirects=True, timeout=30.0, headers=headers) as client:
                 response = await client.get(url)
                 response.raise_for_status()
+                content_length = int(response.headers.get("content-length", 0))
+                if content_length > MAX_RESPONSE_SIZE:
+                    logger.warning(
+                        "Response too large (%d bytes) from %s, skipping",
+                        content_length,
+                        url,
+                    )
+                    return []
                 html = response.text
+                if len(html) > MAX_RESPONSE_SIZE:
+                    logger.warning(
+                        "Response body too large (%d chars) from %s, skipping",
+                        len(html),
+                        url,
+                    )
+                    return []
 
             return self.extract_from_html(html, url)
 

@@ -21,4 +21,5 @@ celery_app.conf.update(
     task_max_retries=3,
     task_reject_on_worker_lost=True,
     broker_connection_retry_on_startup=True,
+    result_expires=3600,  # 1 hour — results tracked via ProgressTracker, not Celery backend
 )

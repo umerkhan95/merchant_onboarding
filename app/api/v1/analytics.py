@@ -7,9 +7,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 import redis.asyncio
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
-from app.api.deps import get_db, get_redis, require_api_key
+from app.api.deps import get_db, get_redis, limiter, require_api_key
+from app.config import settings
 from app.db.queries import COUNT_ALL_PRODUCTS
 from app.infra.perf_tracker import PerfTracker
 from app.infra.progress_tracker import ProgressTracker
@@ -34,7 +35,9 @@ router = APIRouter(tags=["analytics"])
 
 
 @router.get("/jobs", response_model=JobListResponse, dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def list_jobs(
+    request: Request,
     status: str | None = Query(None, description="Filter by job status"),
     redis_client: redis.asyncio.Redis = Depends(get_redis),
 ) -> JobListResponse:
@@ -68,7 +71,9 @@ async def list_jobs(
 
 
 @router.get("/analytics", response_model=AnalyticsSummary, dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def get_analytics(
+    request: Request,
     redis_client: redis.asyncio.Redis = Depends(get_redis),
     db: DatabaseClient | None = Depends(get_db),
 ) -> AnalyticsSummary:
@@ -144,7 +149,9 @@ async def get_analytics(
 
 
 @router.get("/performance", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def get_performance(
+    request: Request,
     redis_client: redis.asyncio.Redis = Depends(get_redis),
 ) -> dict:
     """Get API request performance metrics (latency, throughput, errors)."""
@@ -153,7 +160,9 @@ async def get_performance(
 
 
 @router.get("/crawler-stats", response_model=CrawlerStats, dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def get_crawler_stats(
+    request: Request,
     redis_client: redis.asyncio.Redis = Depends(get_redis),
 ) -> CrawlerStats:
     """Get crawler/extraction performance statistics."""

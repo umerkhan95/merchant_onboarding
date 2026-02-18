@@ -18,6 +18,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "sse-starlette>=2.1.0",
     "httpx>=0.28.0",
+    "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]

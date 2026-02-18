@@ -13,6 +13,7 @@ from app.db.supabase_client import DatabaseClient
 from app.infra.circuit_breaker import CircuitBreaker
 from app.infra.progress_tracker import ProgressTracker
 from app.infra.rate_limiter import RateLimiter
+from app.security.url_validator import URLValidator
 from app.services.pipeline import Pipeline
 from app.workers.celery_app import celery_app
 
@@ -61,7 +62,14 @@ async def _run_pipeline(job_id: str, shop_url: str) -> dict:
 
     Returns:
         Pipeline result dict
+
+    Raises:
+        SSRFError: If the shop URL fails SSRF validation.
     """
+    # SSRF validation: defense-in-depth check even if the API layer already validated.
+    # Celery tasks can be invoked directly (bypassing the API), so we validate here too.
+    URLValidator.validate_or_raise(shop_url)
+
     # Initialize Redis client
     redis_client = redis.from_url(settings.redis_url, decode_responses=False)
 

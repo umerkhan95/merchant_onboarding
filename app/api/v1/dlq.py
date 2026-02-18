@@ -5,16 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 import redis.asyncio
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from app.api.deps import get_redis, require_api_key
+from app.api.deps import get_redis, limiter, require_api_key
+from app.config import settings
 from app.exceptions.errors import NotFoundError
 
 router = APIRouter(prefix="/dlq", tags=["dlq"])
 
 
 @router.get("", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def list_dlq_entries(
+    request: Request,
     redis: redis.asyncio.Redis = Depends(get_redis),
 ) -> dict[str, Any]:
     """List entries in the dead letter queue.
@@ -52,7 +55,9 @@ async def list_dlq_entries(
 
 
 @router.post("/{job_id}/retry", status_code=202, dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_onboard)
 async def retry_dlq_entry(
+    request: Request,
     job_id: str,
     redis: redis.asyncio.Redis = Depends(get_redis),
 ) -> dict[str, Any]:

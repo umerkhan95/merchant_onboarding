@@ -8,7 +8,6 @@ import pytest
 import respx
 
 from app.models.enums import Platform
-from app.services.sitemap_parser import SitemapParser
 from app.services.url_discovery import URLDiscoveryService
 
 # Get fixtures directory
@@ -19,24 +18,6 @@ FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 def sample_sitemap_xml() -> str:
     """Load sample sitemap XML fixture."""
     return (FIXTURES_DIR / "sample_sitemap.xml").read_text()
-
-
-@pytest.fixture
-def sample_sitemap_index_xml() -> str:
-    """Load sample sitemap index XML fixture."""
-    return (FIXTURES_DIR / "sample_sitemap_index.xml").read_text()
-
-
-@pytest.fixture
-def sitemap_products_xml() -> str:
-    """Load nested sitemap-products.xml fixture."""
-    return (FIXTURES_DIR / "sitemap-products.xml").read_text()
-
-
-@pytest.fixture
-def sitemap_pages_xml() -> str:
-    """Load nested sitemap-pages.xml fixture."""
-    return (FIXTURES_DIR / "sitemap-pages.xml").read_text()
 
 
 @pytest.fixture
@@ -70,174 +51,6 @@ def mock_seeder(monkeypatch):
         "app.services.url_discovery.AsyncUrlSeeder", lambda: FakeSeeder()
     )
     return state
-
-
-# ── SitemapParser tests (unchanged) ───────────────────────────────────
-
-
-class TestSitemapParser:
-    """Test cases for SitemapParser."""
-
-    @respx.mock
-    async def test_parse_standard_sitemap(self, sample_sitemap_xml):
-        """Test parsing a standard sitemap XML."""
-        parser = SitemapParser()
-
-        # Mock HTTP request
-        route = respx.get("https://example.com/sitemap.xml").mock(
-            return_value=httpx.Response(200, text=sample_sitemap_xml)
-        )
-
-        entries = await parser.parse("https://example.com/sitemap.xml")
-
-        assert route.called
-        # Should filter to only product URLs (shirt, pants, shoes - 3 products)
-        assert len(entries) == 3
-
-        # Check first entry
-        assert entries[0].url == "https://example.com/products/shirt"
-        assert entries[0].lastmod == "2024-01-01"
-        assert entries[0].priority == 0.8
-
-        # Check second entry
-        assert entries[1].url == "https://example.com/products/pants"
-        assert entries[1].lastmod == "2024-01-02"
-        assert entries[1].priority is None
-
-        # Check third entry (shop URL)
-        assert entries[2].url == "https://example.com/shop/shoes"
-
-    @respx.mock
-    async def test_parse_sitemap_index(
-        self, sample_sitemap_index_xml, sitemap_products_xml, sitemap_pages_xml
-    ):
-        """Test parsing a sitemap index with nested sitemaps."""
-        parser = SitemapParser()
-
-        # Mock sitemap index
-        respx.get("https://example.com/sitemap_index.xml").mock(
-            return_value=httpx.Response(200, text=sample_sitemap_index_xml)
-        )
-
-        # Mock nested sitemaps
-        respx.get("https://example.com/sitemap-products.xml").mock(
-            return_value=httpx.Response(200, text=sitemap_products_xml)
-        )
-
-        respx.get("https://example.com/sitemap-pages.xml").mock(
-            return_value=httpx.Response(200, text=sitemap_pages_xml)
-        )
-
-        entries = await parser.parse("https://example.com/sitemap_index.xml")
-
-        # Should only get product URLs from sitemap-products.xml (2 products)
-        # sitemap-pages.xml has no product URLs
-        assert len(entries) == 2
-        assert entries[0].url == "https://example.com/products/laptop"
-        assert entries[0].lastmod == "2024-01-10"
-        assert entries[0].priority == 1.0
-
-        assert entries[1].url == "https://example.com/products/phone"
-        assert entries[1].lastmod == "2024-01-11"
-        assert entries[1].priority == 0.9
-
-    async def test_filter_urls_by_product_patterns(self):
-        """Test URL filtering by product patterns."""
-        parser = SitemapParser()
-
-        # Test with default patterns
-        assert parser._is_product_url("https://example.com/products/shirt")
-        assert parser._is_product_url("https://example.com/product/123")
-        assert parser._is_product_url("https://example.com/shop/item")
-        assert parser._is_product_url("https://example.com/p/abc")
-
-        # Test non-product URLs
-        assert not parser._is_product_url("https://example.com/about")
-        assert not parser._is_product_url("https://example.com/contact")
-        assert not parser._is_product_url("https://example.com/blog/post")
-
-        # Test custom patterns
-        custom_parser = SitemapParser(product_patterns=["/item/", "/catalog/"])
-        assert custom_parser._is_product_url("https://example.com/item/123")
-        assert custom_parser._is_product_url("https://example.com/catalog/abc")
-        assert not custom_parser._is_product_url("https://example.com/products/shirt")
-
-    @respx.mock
-    async def test_handle_empty_sitemap(self):
-        """Test handling of empty/invalid XML."""
-        parser = SitemapParser()
-
-        # Empty XML
-        respx.get("https://example.com/empty.xml").mock(
-            return_value=httpx.Response(200, text="<?xml version='1.0'?><urlset></urlset>")
-        )
-
-        entries = await parser.parse("https://example.com/empty.xml")
-        assert entries == []
-
-    @respx.mock
-    async def test_handle_invalid_xml(self):
-        """Test handling of invalid XML."""
-        parser = SitemapParser()
-
-        # Invalid XML
-        respx.get("https://example.com/invalid.xml").mock(
-            return_value=httpx.Response(200, text="not valid xml at all")
-        )
-
-        entries = await parser.parse("https://example.com/invalid.xml")
-        assert entries == []
-
-    @respx.mock
-    async def test_handle_404_error(self):
-        """Test handling of 404 errors."""
-        parser = SitemapParser()
-
-        respx.get("https://example.com/notfound.xml").mock(
-            return_value=httpx.Response(404, text="Not Found")
-        )
-
-        entries = await parser.parse("https://example.com/notfound.xml")
-        assert entries == []
-
-    @respx.mock
-    async def test_handle_network_error(self):
-        """Test handling of network errors."""
-        parser = SitemapParser()
-
-        respx.get("https://example.com/error.xml").mock(side_effect=httpx.ConnectError)
-
-        entries = await parser.parse("https://example.com/error.xml")
-        assert entries == []
-
-    @respx.mock
-    async def test_parse_sitemap_without_namespace(self):
-        """Test parsing sitemap XML without namespace."""
-        parser = SitemapParser()
-
-        # Sitemap without namespace
-        xml_no_ns = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset>
-  <url>
-    <loc>https://example.com/products/item1</loc>
-    <lastmod>2024-01-01</lastmod>
-  </url>
-  <url>
-    <loc>https://example.com/products/item2</loc>
-  </url>
-</urlset>"""
-
-        respx.get("https://example.com/sitemap-no-ns.xml").mock(
-            return_value=httpx.Response(200, text=xml_no_ns)
-        )
-
-        entries = await parser.parse("https://example.com/sitemap-no-ns.xml")
-        assert len(entries) == 2
-        assert entries[0].url == "https://example.com/products/item1"
-        assert entries[1].url == "https://example.com/products/item2"
-
-
-# ── URLDiscoveryService tests ─────────────────────────────────────────
 
 
 class TestURLDiscoveryService:

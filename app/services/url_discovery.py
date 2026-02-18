@@ -11,9 +11,10 @@ denylist in ``url_filters``.
 from __future__ import annotations
 
 import logging
-import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
 import httpx
 from crawl4ai import AsyncUrlSeeder, AsyncWebCrawler, SeedingConfig
 from crawl4ai.deep_crawling import (
@@ -24,6 +25,7 @@ from crawl4ai.deep_crawling import (
 )
 from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
 
+from app.config import MAX_RESPONSE_SIZE
 from app.extractors.browser_config import (
     StealthLevel,
     get_browser_config,
@@ -240,7 +242,8 @@ class URLDiscoveryService:
     ) -> list[str]:
         """Probe platform-specific product sitemap URLs and extract <loc> entries.
 
-        Uses lightweight httpx + stdlib XML parsing (no browser needed).
+        Uses lightweight httpx + defusedxml parsing (no browser needed).
+        Responses exceeding MAX_RESPONSE_SIZE are skipped to prevent memory exhaustion.
         """
         urls: list[str] = []
         async with httpx.AsyncClient(
@@ -252,7 +255,23 @@ class URLDiscoveryService:
                     resp = await client.get(sitemap_url)
                     if resp.status_code != 200:
                         continue
-                    parsed_urls = self._parse_sitemap_xml(resp.text)
+                    content_length = int(resp.headers.get("content-length", 0))
+                    if content_length > MAX_RESPONSE_SIZE:
+                        logger.warning(
+                            "Sitemap response too large (%d bytes) from %s, skipping",
+                            content_length,
+                            sitemap_url,
+                        )
+                        continue
+                    xml_text = resp.text
+                    if len(xml_text) > MAX_RESPONSE_SIZE:
+                        logger.warning(
+                            "Sitemap body too large (%d chars) from %s, skipping",
+                            len(xml_text),
+                            sitemap_url,
+                        )
+                        continue
+                    parsed_urls = self._parse_sitemap_xml(xml_text)
                     if parsed_urls:
                         logger.info(
                             "Found %d URLs in %s", len(parsed_urls), sitemap_url
@@ -264,9 +283,15 @@ class URLDiscoveryService:
 
     @staticmethod
     def _parse_sitemap_xml(xml_text: str) -> list[str]:
-        """Extract all <loc> URLs from a sitemap XML string."""
+        """Extract all <loc> URLs from a sitemap XML string.
+
+        Uses defusedxml to block XML entity expansion attacks (e.g. Billion Laughs).
+        """
         try:
             root = ET.fromstring(xml_text)
+        except DefusedXmlException as e:
+            logger.warning("Rejected unsafe sitemap XML: %s", e)
+            return []
         except ET.ParseError:
             return []
 

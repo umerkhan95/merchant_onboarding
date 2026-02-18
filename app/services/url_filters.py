@@ -1,8 +1,7 @@
 """Shared URL filtering constants and helpers for URL discovery.
 
 Centralizes denylist logic, platform-specific sitemap URLs, and product
-URL patterns so that url_discovery and sitemap_parser can import without
-circular dependencies.
+URL patterns used by url_discovery.
 """
 
 from __future__ import annotations

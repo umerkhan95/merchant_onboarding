@@ -6,11 +6,15 @@ from typing import TYPE_CHECKING
 
 import redis.asyncio
 from fastapi import Depends, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.security.api_key import verify_api_key
 
 if TYPE_CHECKING:
     from app.db.supabase_client import DatabaseClient
+
+limiter = Limiter(key_func=get_remote_address)
 
 
 def get_redis(request: Request) -> redis.asyncio.Redis:
@@ -39,4 +43,4 @@ def get_db(request: Request) -> DatabaseClient | None:
 
 require_api_key = Depends(verify_api_key)
 
-__all__ = ["get_db", "get_redis", "require_api_key", "verify_api_key"]
+__all__ = ["get_db", "get_redis", "limiter", "require_api_key", "verify_api_key"]

@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from pydantic_settings import BaseSettings
 
+# Maximum allowed HTTP response body size (10 MB).
+# Responses larger than this are rejected before parsing to prevent
+# memory exhaustion from XML bombs or oversized HTML payloads.
+MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MB in bytes
+
 
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

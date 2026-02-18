@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app.config import MAX_RESPONSE_SIZE
 from app.models.enums import Platform
 
 logger = logging.getLogger(__name__)
@@ -247,6 +248,8 @@ class PlatformDetector:
     ) -> None:
         """Analyze HTML content for meta tags and CDN sources.
 
+        Responses exceeding MAX_RESPONSE_SIZE are skipped to prevent memory exhaustion.
+
         Args:
             client: HTTP client
             url: Target URL
@@ -262,7 +265,25 @@ class PlatformDetector:
                 logger.debug(f"HTML probe returned status {response.status_code} for {url}")
                 return
 
-            html = response.text.lower()
+            content_length = int(response.headers.get("content-length", 0))
+            if content_length > MAX_RESPONSE_SIZE:
+                logger.warning(
+                    "HTML probe response too large (%d bytes) from %s, skipping",
+                    content_length,
+                    url,
+                )
+                return
+
+            raw_html = response.text
+            if len(raw_html) > MAX_RESPONSE_SIZE:
+                logger.warning(
+                    "HTML probe body too large (%d chars) from %s, skipping",
+                    len(raw_html),
+                    url,
+                )
+                return
+
+            html = raw_html.lower()
 
             # Meta tag detection
             self._analyze_meta_tags(html, signals)

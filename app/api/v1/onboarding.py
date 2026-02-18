@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
 import redis.asyncio
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
-from app.api.deps import get_db, get_redis, require_api_key
+from app.api.deps import get_db, get_redis, limiter, require_api_key
+from app.config import settings
 from app.exceptions.errors import NotFoundError
 from app.infra.progress_tracker import ProgressTracker
 from app.models.enums import JobStatus
 from app.models.job import JobProgress, OnboardingRequest, OnboardingResponse
+from app.security.url_validator import URLValidator
 
 if TYPE_CHECKING:
     from app.db.supabase_client import DatabaseClient
@@ -75,15 +78,21 @@ async def _run_pipeline_direct(
 
 
 @router.post("", status_code=202, response_model=OnboardingResponse, dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_onboard)
 async def create_onboarding_job(
-    request: OnboardingRequest,
+    request: Request,
+    body: OnboardingRequest,
     redis: redis.asyncio.Redis = Depends(get_redis),
     db: DatabaseClient | None = Depends(get_db),
 ) -> OnboardingResponse:
     """Accept a shop URL and queue an onboarding job.
 
     Returns 202 Accepted with a job_id for tracking progress.
+    Validates the URL against SSRF before dispatching.
     """
+    # SSRF validation: resolve hostname and check for private IPs / DNS rebinding
+    await URLValidator.validate_or_raise_async(str(body.url))
+
     job_id = f"job_{uuid.uuid4().hex[:12]}"
 
     tracker = ProgressTracker(redis)
@@ -95,21 +104,21 @@ async def create_onboarding_job(
         status=JobStatus.QUEUED,
         current_step="Job queued for processing",
     )
-    await tracker.set_metadata(job_id, shop_url=str(request.url))
+    await tracker.set_metadata(job_id, shop_url=str(body.url))
 
     # Try Celery first, fall back to direct execution
     dispatched = False
     try:
         from app.workers.tasks import run_onboarding_pipeline
 
-        run_onboarding_pipeline.delay(job_id=job_id, url=str(request.url))
+        run_onboarding_pipeline.delay(job_id=job_id, url=str(body.url))
         dispatched = True
         logger.info("Job %s dispatched to Celery", job_id)
     except Exception:
         logger.info("Celery unavailable, running pipeline directly for job %s", job_id)
 
     if not dispatched:
-        asyncio.create_task(_run_pipeline_direct(job_id, str(request.url), redis, db))
+        asyncio.create_task(_run_pipeline_direct(job_id, str(body.url), redis, db))
 
     return OnboardingResponse(
         job_id=job_id,
@@ -119,7 +128,9 @@ async def create_onboarding_job(
 
 
 @router.get("/{job_id}", response_model=JobProgress, dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def get_job_status(
+    request: Request,
     job_id: str,
     redis: redis.asyncio.Redis = Depends(get_redis),
 ) -> JobProgress:
@@ -135,16 +146,21 @@ async def get_job_status(
 
 
 @router.get("/{job_id}/progress", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def stream_progress(
+    request: Request,
     job_id: str,
     redis: redis.asyncio.Redis = Depends(get_redis),
 ) -> EventSourceResponse:
     """SSE endpoint for real-time progress updates."""
 
+    max_sse_seconds = 600  # 10 minutes max
+
     async def event_generator() -> Any:
         tracker = ProgressTracker(redis)
+        start = time.monotonic()
 
-        while True:
+        while time.monotonic() - start < max_sse_seconds:
             progress_data = await tracker.get(job_id)
 
             if progress_data is None:
@@ -170,5 +186,10 @@ async def stream_progress(
                 break
 
             await asyncio.sleep(1)
+        else:
+            yield {
+                "event": "timeout",
+                "data": '{"error": "SSE stream timed out after 10 minutes"}',
+            }
 
     return EventSourceResponse(event_generator())

@@ -9,9 +9,10 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
-from app.api.deps import get_db, require_api_key
+from app.api.deps import get_db, limiter, require_api_key
+from app.config import settings
 from app.db.queries import (
     COUNT_PRODUCTS_BY_DOMAIN,
     COUNT_PRODUCTS_BY_SHOP,
@@ -55,7 +56,9 @@ def _extract_domain(shop_id: str) -> str:
 
 
 @router.get("", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def list_products(
+    request: Request,
     shop_id: str = Query(..., description="Shop/merchant identifier"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(50, ge=1, le=100, description="Items per page"),
@@ -100,7 +103,9 @@ async def list_products(
 
 
 @router.get("/{product_id}", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
 async def get_product(
+    request: Request,
     product_id: int,
     db: DatabaseClient | None = Depends(get_db),
 ) -> dict[str, Any]:

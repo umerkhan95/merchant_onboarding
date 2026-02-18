@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.deps import limiter
 from app.config import settings
 from app.main import create_app
 
@@ -115,6 +116,9 @@ def api_client(mock_redis: MockRedis, valid_api_key: str) -> TestClient:
 
     # Create app
     app = create_app()
+
+    # Disable rate limiting in tests
+    limiter.enabled = False
 
     # Override Redis dependency with mock
     app.state.redis = mock_redis
