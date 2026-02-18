@@ -631,8 +631,8 @@ async def test_pipeline_shopify_fallback_on_empty_api_response(pipeline, mock_pr
                     assert result["total_extracted"] == 2
                     assert result["extraction_tier"] == "schema_org"
 
-                    # Shopify API should have been tried once
-                    assert mock_shopify.extract.call_count == 1
+                    # Shopify API: 1 initial + 2 supplementation attempts (main + shop.{domain})
+                    assert mock_shopify.extract.call_count == 3
                     # Schema.org: 1 probe + 2 per-URL tracked calls
                     assert mock_schema.extract.call_count == 3
 
@@ -883,3 +883,411 @@ async def test_pipeline_merges_partial_probes(pipeline, mock_progress_tracker):
                 # OG should win as primary tier
                 assert result["extraction_tier"] == "opengraph"
                 assert result["total_extracted"] == 1
+
+
+# ── Shopify API price supplementation tests ──────────────────────────
+
+
+class TestMatchShopifyProduct:
+    """Unit tests for Pipeline._match_shopify_product()."""
+
+    def test_match_by_url_handle(self):
+        """Match Schema.org product to Shopify API product via URL handle."""
+        schema = {"name": "Sock Pack", "url": "https://bombas.com/products/sock-4-pack"}
+        api_by_handle = {"sock-4-pack": {"handle": "sock-4-pack", "title": "Sock Pack"}}
+
+        result = Pipeline._match_shopify_product(schema, api_by_handle, {})
+
+        assert result is not None
+        assert result["handle"] == "sock-4-pack"
+
+    def test_match_by_title_fallback(self):
+        """Fall back to title match when URL has no /products/ segment."""
+        schema = {"name": "Sock Pack", "url": "https://bombas.com/sock-pack"}
+        api_by_title = {"sock pack": {"handle": "sock-4-pack", "title": "Sock Pack"}}
+
+        result = Pipeline._match_shopify_product(schema, {}, api_by_title)
+
+        assert result is not None
+        assert result["handle"] == "sock-4-pack"
+
+    def test_no_match_returns_none(self):
+        """Return None when no match is found."""
+        schema = {"name": "Unknown Product", "url": "https://example.com/products/xyz"}
+        api_by_handle = {"sock-4-pack": {"handle": "sock-4-pack"}}
+        api_by_title = {"sock pack": {"handle": "sock-4-pack"}}
+
+        result = Pipeline._match_shopify_product(schema, api_by_handle, api_by_title)
+
+        assert result is None
+
+    def test_handle_with_query_params(self):
+        """Handle extraction ignores query parameters."""
+        schema = {"name": "Shirt", "url": "https://example.com/products/cool-shirt?variant=123"}
+        api_by_handle = {"cool-shirt": {"handle": "cool-shirt", "title": "Shirt"}}
+
+        result = Pipeline._match_shopify_product(schema, api_by_handle, {})
+
+        assert result is not None
+        assert result["handle"] == "cool-shirt"
+
+    def test_handle_with_trailing_slash(self):
+        """Handle extraction ignores trailing slashes."""
+        schema = {"name": "Shirt", "url": "https://example.com/products/cool-shirt/"}
+        api_by_handle = {"cool-shirt": {"handle": "cool-shirt", "title": "Shirt"}}
+
+        result = Pipeline._match_shopify_product(schema, api_by_handle, {})
+
+        assert result is not None
+
+    def test_title_match_case_insensitive(self):
+        """Title matching is case-insensitive."""
+        schema = {"name": "  Men's QUARTER Top Sock  ", "url": ""}
+        api_by_title = {"men's quarter top sock": {"handle": "sock", "title": "Men's Quarter Top Sock"}}
+
+        result = Pipeline._match_shopify_product(schema, {}, api_by_title)
+
+        assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_supplement_fills_zero_price(pipeline):
+    """Zero-price Schema.org products get prices filled from Shopify API."""
+    raw_products = [
+        {
+            "name": "Sock 4-Pack",
+            "url": "https://example.com/products/sock-4-pack",
+            "@type": "Product",
+            # No "offers" key — normalizer would default price to 0
+        },
+        {
+            "name": "T-Shirt",
+            "url": "https://example.com/products/t-shirt",
+            "@type": "Product",
+            "offers": {"price": "28.00", "priceCurrency": "USD"},
+        },
+    ]
+
+    api_products = [
+        {
+            "handle": "sock-4-pack",
+            "title": "Sock 4-Pack",
+            "variants": [{"price": "16.00"}],
+            "_shop_currency": "USD",
+        },
+        {
+            "handle": "t-shirt",
+            "title": "T-Shirt",
+            "variants": [{"price": "32.00"}],
+            "_shop_currency": "USD",
+        },
+    ]
+
+    with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_class:
+        mock_extractor = AsyncMock()
+        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_class.return_value = mock_extractor
+
+        result = await pipeline._supplement_shopify_prices(
+            raw_products, "https://example.com"
+        )
+
+    # Zero-price product should now have offers with API price
+    assert result[0]["offers"]["price"] == "16.00"
+    assert result[0]["offers"]["priceCurrency"] == "USD"
+
+    # Already-priced product with matching currency should be untouched
+    assert result[1]["offers"]["price"] == "28.00"
+    assert result[1]["offers"]["priceCurrency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_supplement_corrects_geo_currency(pipeline):
+    """Products with geo-targeted currency get corrected to base catalog currency."""
+    raw_products = [
+        {
+            "name": "Hoodie",
+            "url": "https://example.com/products/hoodie",
+            "offers": {"price": "65.00", "priceCurrency": "EUR"},
+        },
+        {
+            "name": "Sock Pack",
+            "url": "https://example.com/products/sock-pack",
+            # No offers — zero-price, triggers API fetch
+        },
+    ]
+
+    api_products = [
+        {
+            "handle": "hoodie",
+            "title": "Hoodie",
+            "variants": [{"price": "58.00"}],
+            "_shop_currency": "USD",
+        },
+        {
+            "handle": "sock-pack",
+            "title": "Sock Pack",
+            "variants": [{"price": "16.00"}],
+            "_shop_currency": "USD",
+        },
+    ]
+
+    with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_class:
+        mock_extractor = AsyncMock()
+        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_class.return_value = mock_extractor
+
+        result = await pipeline._supplement_shopify_prices(
+            raw_products, "https://example.com"
+        )
+
+    # EUR product should be corrected to USD with API price
+    assert result[0]["offers"]["price"] == "58.00"
+    assert result[0]["offers"]["priceCurrency"] == "USD"
+
+    # Zero-price product should be filled from API
+    assert result[1]["offers"]["price"] == "16.00"
+    assert result[1]["offers"]["priceCurrency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_supplement_no_op_when_api_returns_empty(pipeline):
+    """Supplementation is a no-op when Shopify API returns 0 products."""
+    raw_products = [
+        {
+            "name": "Sock",
+            "url": "https://example.com/products/sock",
+            "@type": "Product",
+            # No offers — zero-price
+        },
+    ]
+
+    with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_class:
+        mock_extractor = AsyncMock()
+        mock_extractor.extract = AsyncMock(return_value=[])
+        mock_class.return_value = mock_extractor
+
+        result = await pipeline._supplement_shopify_prices(
+            raw_products, "https://example.com"
+        )
+
+    # Product should be unchanged (no offers added)
+    assert "offers" not in result[0]
+
+
+@pytest.mark.asyncio
+async def test_supplement_no_op_when_all_prices_valid(pipeline):
+    """No supplementation needed when all products have valid prices and correct currency."""
+    raw_products = [
+        {
+            "name": "Shirt",
+            "url": "https://example.com/products/shirt",
+            "offers": {"price": "29.99", "priceCurrency": "USD"},
+        },
+    ]
+
+    api_products = [
+        {
+            "handle": "shirt",
+            "title": "Shirt",
+            "variants": [{"price": "29.99"}],
+            "_shop_currency": "USD",
+        },
+    ]
+
+    with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_class:
+        mock_extractor = AsyncMock()
+        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_class.return_value = mock_extractor
+
+        result = await pipeline._supplement_shopify_prices(
+            raw_products, "https://example.com"
+        )
+
+    # Price and currency should be unchanged
+    assert result[0]["offers"]["price"] == "29.99"
+    assert result[0]["offers"]["priceCurrency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_supplement_tries_alternative_url(pipeline):
+    """Supplementation tries shop.{domain} when main URL API returns empty."""
+    raw_products = [
+        {
+            "name": "Sock",
+            "url": "https://bombas.com/products/sock",
+            # No offers
+        },
+    ]
+
+    api_products = [
+        {
+            "handle": "sock",
+            "title": "Sock",
+            "variants": [{"price": "12.00"}],
+            "_shop_currency": "USD",
+        },
+    ]
+
+    with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_class:
+        mock_extractor = AsyncMock()
+        # First call (main URL) → empty, second call (shop.bombas.com) → products
+        mock_extractor.extract = AsyncMock(side_effect=[[], api_products])
+        mock_class.return_value = mock_extractor
+
+        result = await pipeline._supplement_shopify_prices(
+            raw_products, "https://bombas.com"
+        )
+
+    # Should have filled from the alternative URL
+    assert result[0]["offers"]["price"] == "12.00"
+    assert result[0]["offers"]["priceCurrency"] == "USD"
+
+    # Verify both URLs were tried
+    assert mock_extractor.extract.call_count == 2
+    calls = mock_extractor.extract.call_args_list
+    assert "bombas.com" in calls[0][0][0]
+    assert "shop.bombas.com" in calls[1][0][0]
+
+
+@pytest.mark.asyncio
+async def test_supplement_handles_offers_as_list(pipeline):
+    """Supplementation works when Schema.org 'offers' is a list (not dict)."""
+    raw_products = [
+        {
+            "name": "Multi Offer",
+            "url": "https://example.com/products/multi",
+            "offers": [{"price": "0", "priceCurrency": "USD"}],
+        },
+    ]
+
+    api_products = [
+        {
+            "handle": "multi",
+            "title": "Multi Offer",
+            "variants": [{"price": "25.00"}],
+            "_shop_currency": "USD",
+        },
+    ]
+
+    with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_class:
+        mock_extractor = AsyncMock()
+        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_class.return_value = mock_extractor
+
+        result = await pipeline._supplement_shopify_prices(
+            raw_products, "https://example.com"
+        )
+
+    # List-format offers should be updated in place
+    assert result[0]["offers"][0]["price"] == "25.00"
+    assert result[0]["offers"][0]["priceCurrency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_supplement_does_not_overwrite_with_api_zero_price(pipeline):
+    """Don't replace Schema.org price with API price if API price is also 0."""
+    raw_products = [
+        {
+            "name": "Discontinued",
+            "url": "https://example.com/products/discontinued",
+            # No offers
+        },
+    ]
+
+    api_products = [
+        {
+            "handle": "discontinued",
+            "title": "Discontinued",
+            "variants": [{"price": "0"}],
+            "_shop_currency": "USD",
+        },
+    ]
+
+    with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_class:
+        mock_extractor = AsyncMock()
+        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_class.return_value = mock_extractor
+
+        result = await pipeline._supplement_shopify_prices(
+            raw_products, "https://example.com"
+        )
+
+    # Should NOT inject zero-price offers from API
+    assert "offers" not in result[0]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_shopify_fallback_triggers_supplementation(
+    pipeline, mock_progress_tracker
+):
+    """Full pipeline: Shopify API → 0, Schema.org wins, supplementation fills prices."""
+    with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
+        mock_detect.return_value = PlatformResult(
+            platform=Platform.SHOPIFY,
+            confidence=0.9,
+            signals=["api:/products.json"],
+        )
+
+        with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
+            mock_discover.return_value = [
+                "https://example.com/products/sock",
+                "https://example.com/products/shirt",
+            ]
+
+            with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_shopify_class:
+                api_products = [
+                    {
+                        "handle": "sock",
+                        "title": "Sock",
+                        "variants": [{"price": "12.00"}],
+                        "_shop_currency": "USD",
+                    },
+                    {
+                        "handle": "shirt",
+                        "title": "Shirt",
+                        "variants": [{"price": "25.00"}],
+                        "_shop_currency": "USD",
+                    },
+                ]
+
+                mock_shopify = AsyncMock()
+                # Calls: 1) initial API try→empty, 2) supplement main→empty, 3) supplement alt→products
+                mock_shopify.extract = AsyncMock(side_effect=[[], [], api_products])
+                mock_shopify_class.return_value = mock_shopify
+
+                # Schema.org returns products but with zero prices (no offers)
+                with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
+                    schema_product_sock = {
+                        "name": "Sock",
+                        "@type": "Product",
+                        "url": "https://example.com/products/sock",
+                        "image": "https://example.com/sock.jpg",
+                        "description": "A sock",
+                    }
+                    schema_product_shirt = {
+                        "name": "Shirt",
+                        "@type": "Product",
+                        "url": "https://example.com/products/shirt",
+                        "image": "https://example.com/shirt.jpg",
+                        "description": "A shirt",
+                        "offers": {"price": "30.00", "priceCurrency": "EUR"},
+                    }
+
+                    mock_schema = AsyncMock()
+                    mock_schema.extract = AsyncMock(
+                        side_effect=[
+                            [schema_product_sock],  # probe
+                            [schema_product_sock],  # URL 1
+                            [schema_product_shirt],  # URL 2
+                        ]
+                    )
+                    mock_schema_class.return_value = mock_schema
+
+                    result = await pipeline.run(
+                        "job-supplement", "https://example.com"
+                    )
+
+                    assert result["platform"] == "shopify"
+                    assert result["extraction_tier"] == "schema_org"
+                    assert result["total_normalized"] == 2
