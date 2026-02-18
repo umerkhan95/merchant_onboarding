@@ -15,7 +15,7 @@ import httpx
 
 from app.config import MAX_RESPONSE_SIZE
 from app.exceptions.errors import CircuitOpenError, ExtractionError
-from app.extractors.base import ExtractionResult
+from app.extractors.base import BaseExtractor, ExtractionResult
 from app.extractors.css_extractor import CSSExtractor
 from app.extractors.magento_api import MagentoAPIExtractor
 from app.extractors.opengraph_extractor import OpenGraphExtractor
@@ -56,6 +56,9 @@ _MAX_REEXTRACTION_URLS = 50
 
 # Concurrent extraction batch size (URLs processed in parallel per batch)
 _EXTRACTION_CONCURRENCY = 10
+
+# Normalization + ingestion batch size (products processed per chunk)
+_NORMALIZE_BATCH_SIZE = 500
 
 
 class Pipeline:
@@ -246,13 +249,14 @@ class Pipeline:
 
             raw_products = extraction_result.products
             extraction_tier = extraction_result.tier
+            total_extracted = len(raw_products)
             await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
 
             # Step 3c: Verify data completeness + targeted re-extraction
             await self.progress.update(
                 job_id=job_id,
                 processed=0,
-                total=len(raw_products),
+                total=total_extracted,
                 status=JobStatus.VERIFYING,
                 current_step="Checking data completeness",
             )
@@ -271,47 +275,61 @@ class Pipeline:
                     raw_products, plan, shop_url
                 )
 
-            # Step 4: Normalize products
+            # Steps 4+5: Normalize and ingest in batches
+            # Process _NORMALIZE_BATCH_SIZE products at a time through normalization
+            # and ingestion to avoid holding all normalized products in memory.
+            total_normalized = 0
+            total_ingested = 0
+
             await self.progress.update(
                 job_id=job_id,
                 processed=0,
-                total=len(raw_products),
+                total=total_extracted,
                 status=JobStatus.NORMALIZING,
-                current_step=f"Normalizing {len(raw_products)} products",
+                current_step=f"Normalizing {total_extracted} products",
             )
 
-            normalized_products = []
-            for i, raw in enumerate(raw_products):
-                product = self.normalizer.normalize(
-                    raw=raw,
-                    shop_id=shop_url,
-                    platform=platform,
-                    shop_url=shop_url,
-                )
-                if product:
-                    normalized_products.append(product)
+            for batch_start in range(0, total_extracted, _NORMALIZE_BATCH_SIZE):
+                batch_end = min(batch_start + _NORMALIZE_BATCH_SIZE, total_extracted)
+                raw_batch = raw_products[batch_start:batch_end]
 
-                # Update progress every 10 products
-                if (i + 1) % 10 == 0:
-                    await self.progress.update(
-                        job_id=job_id,
-                        processed=i + 1,
-                        total=len(raw_products),
-                        status=JobStatus.NORMALIZING,
-                        current_step=f"Normalized {i + 1}/{len(raw_products)} products",
+                # Normalize this batch
+                normalized_batch = []
+                for raw in raw_batch:
+                    product = self.normalizer.normalize(
+                        raw=raw,
+                        shop_id=shop_url,
+                        platform=platform,
+                        shop_url=shop_url,
                     )
+                    if product:
+                        normalized_batch.append(product)
 
-            logger.info(f"Normalized {len(normalized_products)} products")
+                total_normalized += len(normalized_batch)
+
+                await self.progress.update(
+                    job_id=job_id,
+                    processed=batch_end,
+                    total=total_extracted,
+                    status=JobStatus.NORMALIZING,
+                    current_step=f"Normalized {batch_end}/{total_extracted} products",
+                )
+
+                # Ingest this batch immediately (if ingestor available)
+                if self.ingestor and normalized_batch:
+                    total_ingested += await self.ingestor.ingest(normalized_batch)
+
+            logger.info(f"Normalized {total_normalized} products")
 
             # Log normalization drop rate if products were lost
-            if raw_products:
-                dropped = len(raw_products) - len(normalized_products)
+            if total_extracted:
+                dropped = total_extracted - total_normalized
                 if dropped > 0:
-                    drop_rate = dropped / len(raw_products) * 100
+                    drop_rate = dropped / total_extracted * 100
                     logger.warning(
                         "Normalization dropped %d/%d products (%.1f%%)",
                         dropped,
-                        len(raw_products),
+                        total_extracted,
                         drop_rate,
                     )
                     if drop_rate > 50:
@@ -319,12 +337,15 @@ class Pipeline:
                             "Normalization drop rate >50%% -- possible extractor/normalizer mismatch"
                         )
 
-            # Step 4b: Reconciliation report
+            if total_ingested:
+                logger.info(f"Ingested {total_ingested} products to database")
+
+            # Reconciliation report (uses tracker audit counts, not product list)
             audit = extraction_result.audit
             report = self.reconciliation_reporter.generate(
                 discovered_urls=urls,
                 audit_summary=audit,
-                products_normalized=len(normalized_products),
+                products_normalized=total_normalized,
             )
             await self.progress.set_metadata(
                 job_id,
@@ -332,40 +353,29 @@ class Pipeline:
                 coverage_percentage=round(report.coverage_percentage, 2),
             )
 
-            # Step 5: Ingest products (if ingestor available)
-            total_ingested = 0
-            if self.ingestor and normalized_products:
-                await self.progress.update(
-                    job_id=job_id,
-                    processed=0,
-                    total=len(normalized_products),
-                    status=JobStatus.INGESTING,
-                    current_step=f"Ingesting {len(normalized_products)} products to database",
-                )
-
-                total_ingested = await self.ingestor.ingest(normalized_products)
-                logger.info(f"Ingested {total_ingested} products to database")
+            # Release raw_products memory now that normalization+ingestion is complete
+            del raw_products
 
             # Step 6: Mark as completed
             await self.progress.update(
                 job_id=job_id,
-                processed=len(normalized_products),
-                total=len(normalized_products),
+                processed=total_normalized,
+                total=total_normalized,
                 status=JobStatus.COMPLETED,
                 current_step="Pipeline completed successfully",
             )
             await self.progress.set_metadata(
                 job_id,
                 completed_at=datetime.now(timezone.utc).isoformat(),
-                products_count=len(normalized_products),
+                products_count=total_normalized,
             )
 
             logger.info(f"Pipeline completed for job {job_id}")
 
             return {
                 "platform": platform.value,
-                "total_extracted": len(raw_products),
-                "total_normalized": len(normalized_products),
+                "total_extracted": total_extracted,
+                "total_normalized": total_normalized,
                 "total_ingested": total_ingested,
                 "extraction_tier": extraction_tier.value,
                 "coverage_percentage": report.coverage_percentage,
@@ -758,6 +768,21 @@ class Pipeline:
                 await client.aclose()
         return None
 
+    @staticmethod
+    def _has_batch_extraction(extractor) -> bool:
+        """Check if extractor overrides extract_batch with a non-default implementation.
+
+        Browser-based extractors (CSS, SmartCSS, LLM) override extract_batch()
+        to use arun_many() with a single shared browser, which is much more
+        efficient than spawning per-URL browser instances.
+        """
+        ext_type = type(extractor)
+        return (
+            isinstance(extractor, BaseExtractor)
+            and hasattr(ext_type, "extract_batch")
+            and ext_type.extract_batch is not BaseExtractor.extract_batch
+        )
+
     async def _extract_from_urls_tracked(
         self,
         extractor,
@@ -766,16 +791,16 @@ class Pipeline:
         job_id: str,
         tracker: ExtractionTracker,
     ) -> list[dict]:
-        """Extract products per-URL with source tagging, outcome tracking, and concurrency.
+        """Extract products from URLs with source tagging, outcome tracking, and concurrency.
 
-        Processes URLs in batches of _EXTRACTION_CONCURRENCY using asyncio.gather.
-        Each URL gets its own circuit-breaker-wrapped extract() call, enabling
-        per-URL outcome recording and source URL tagging.
+        Routes through two paths:
+        - **Batch path**: if extractor overrides extract_batch() (browser-based extractors),
+          sends URL batches through extract_batch() for single-browser efficiency.
+        - **Per-URL path**: otherwise, uses asyncio.gather with per-URL extract() calls.
 
         After all URLs are processed, checks for a catastrophic error rate:
         if >80% of URLs errored (and at least 6 URLs were attempted), raises
-        ExtractionError to abort the pipeline rather than silently returning
-        an empty product list.
+        ExtractionError to abort the pipeline.
 
         Args:
             extractor: Extractor instance
@@ -786,6 +811,107 @@ class Pipeline:
 
         Returns:
             List of raw product dicts from all URLs
+        """
+        if self._has_batch_extraction(extractor):
+            return await self._extract_batch_tracked(
+                extractor, urls, domain, job_id, tracker
+            )
+        return await self._extract_per_url_tracked(
+            extractor, urls, domain, job_id, tracker
+        )
+
+    async def _extract_batch_tracked(
+        self,
+        extractor,
+        urls: list[str],
+        domain: str,
+        job_id: str,
+        tracker: ExtractionTracker,
+    ) -> list[dict]:
+        """Batch extraction path for browser-based extractors.
+
+        Sends URL batches through extract_batch() which uses a single browser
+        instance with arun_many(). Circuit breaker wraps the entire batch.
+        Per-URL tracking is inferred from product source URLs.
+        """
+        total = len(urls)
+        all_products: list[dict] = []
+
+        for i in range(0, total, _EXTRACTION_CONCURRENCY):
+            batch_urls = urls[i : i + _EXTRACTION_CONCURRENCY]
+
+            try:
+                async def batch_fn(batch=batch_urls):
+                    result = await extractor.extract_batch(batch)
+                    return result.products
+
+                async with self.rate_limiter.acquire(domain):
+                    products = await self.circuit_breaker.call(domain, batch_fn)
+
+                if products:
+                    # Tag each product with its source URL (best effort from product_url field)
+                    for product in products:
+                        src = product.get("product_url") or product.get("url", "")
+                        if src:
+                            product[SOURCE_URL_KEY] = src
+                    # Record batch-level success per URL that yielded products
+                    seen_urls: set[str] = set()
+                    for product in products:
+                        src = product.get(SOURCE_URL_KEY, "")
+                        if src and src not in seen_urls:
+                            seen_urls.add(src)
+                    for url in batch_urls:
+                        if url in seen_urls:
+                            url_products = [
+                                p for p in products if p.get(SOURCE_URL_KEY) == url
+                            ]
+                            tracker.record_success(url, len(url_products))
+                        else:
+                            tracker.record_empty(url)
+                    all_products.extend(products)
+                else:
+                    for url in batch_urls:
+                        tracker.record_empty(url)
+
+            except CircuitOpenError:
+                logger.warning("Circuit breaker OPEN for %s, skipping batch", domain)
+                break
+            except Exception as e:
+                logger.error("Batch extraction failed for %s: %s", domain, e)
+                for url in batch_urls:
+                    tracker.record_error(url, str(e))
+
+            processed = min(i + len(batch_urls), total)
+            await self.progress.update(
+                job_id=job_id,
+                processed=processed,
+                total=total,
+                status=JobStatus.EXTRACTING,
+                current_step=f"Extracted {processed}/{total} URLs, got {len(all_products)} products",
+            )
+
+        # Catastrophic error rate detection
+        audit = tracker.build_audit()
+        if audit.urls_attempted > 5 and audit.urls_errored / audit.urls_attempted > 0.8:
+            error_rate = audit.urls_errored / audit.urls_attempted
+            raise ExtractionError(
+                f"Catastrophic error rate: {error_rate:.0%} of {audit.urls_attempted} URLs failed"
+            )
+
+        return all_products
+
+    async def _extract_per_url_tracked(
+        self,
+        extractor,
+        urls: list[str],
+        domain: str,
+        job_id: str,
+        tracker: ExtractionTracker,
+    ) -> list[dict]:
+        """Per-URL extraction path for HTTP-based extractors (Schema.org, OpenGraph).
+
+        Processes URLs in batches of _EXTRACTION_CONCURRENCY using asyncio.gather.
+        Each URL gets its own circuit-breaker-wrapped extract() call.
         """
         total = len(urls)
         all_products: list[dict] = []

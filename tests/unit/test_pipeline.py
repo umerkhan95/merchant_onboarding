@@ -318,11 +318,12 @@ async def test_pipeline_progress_updates_at_each_step(pipeline, mock_progress_tr
                 ]
 
                 # Verify we went through all steps
+                # Note: INGESTING is no longer a separate step — ingestion
+                # happens inline during NORMALIZING batches for memory efficiency
                 assert JobStatus.DETECTING in statuses
                 assert JobStatus.DISCOVERING in statuses
                 assert JobStatus.EXTRACTING in statuses
                 assert JobStatus.NORMALIZING in statuses
-                assert JobStatus.INGESTING in statuses
                 assert JobStatus.COMPLETED in statuses
 
 
