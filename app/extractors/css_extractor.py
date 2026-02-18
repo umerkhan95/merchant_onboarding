@@ -9,7 +9,7 @@ from crawl4ai import AsyncWebCrawler
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
-from app.extractors.base import BaseExtractor
+from app.extractors.base import BaseExtractor, ExtractorResult
 from app.extractors.browser_config import (
     StealthLevel,
     get_browser_config,
@@ -75,7 +75,7 @@ class CSSExtractor(BaseExtractor):
             logger.exception("CSS extraction failed for %s: %s", url, e)
             return []
 
-    async def extract(self, url: str) -> list[dict]:
+    async def extract(self, url: str) -> ExtractorResult:
         """Extract product data using crawl4ai JsonCssExtractionStrategy with stealth escalation."""
         start_idx = self._ESCALATION_ORDER.index(self.stealth_level)
 
@@ -86,14 +86,14 @@ class CSSExtractor(BaseExtractor):
             products = await self._crawl_single(url, level)
 
             if products:
-                return products
+                return ExtractorResult(products=products)
 
-        return []
+        return ExtractorResult(products=[], complete=False, error="All stealth levels exhausted with 0 products")
 
-    async def extract_batch(self, urls: list[str]) -> list[dict]:
+    async def extract_batch(self, urls: list[str]) -> ExtractorResult:
         """Extract products from multiple URLs using a single browser instance."""
         if not urls:
-            return []
+            return ExtractorResult(products=[])
 
         browser_config = get_browser_config(self.stealth_level)
         extraction_strategy = JsonCssExtractionStrategy(self.schema, verbose=False)
@@ -107,6 +107,7 @@ class CSSExtractor(BaseExtractor):
         )
 
         all_products = []
+        error: str | None = None
         try:
             crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
             async with AsyncWebCrawler(
@@ -131,5 +132,6 @@ class CSSExtractor(BaseExtractor):
                         logger.error("Failed to parse JSON from %s", result.url)
         except Exception as e:
             logger.exception("Batch CSS extraction failed: %s", e)
+            error = str(e)
 
-        return all_products
+        return ExtractorResult(products=all_products, complete=error is None, error=error)

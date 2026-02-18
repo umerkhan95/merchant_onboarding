@@ -189,7 +189,7 @@ class TestSchemaOrgExtractorSizeLimits:
         )
 
         result = await extractor.extract("https://example.com/products/item")
-        assert result == []
+        assert result.products == []
 
     @respx.mock
     async def test_rejects_response_by_body_length(self):
@@ -202,7 +202,7 @@ class TestSchemaOrgExtractorSizeLimits:
         )
 
         result = await extractor.extract("https://example.com/products/item")
-        assert result == []
+        assert result.products == []
 
     @respx.mock
     async def test_accepts_normal_response(self):
@@ -214,8 +214,8 @@ class TestSchemaOrgExtractorSizeLimits:
         )
 
         result = await extractor.extract("https://example.com/products/item")
-        assert len(result) == 1
-        assert result[0]["name"] == "Test Product"
+        assert len(result.products) == 1
+        assert result.products[0]["name"] == "Test Product"
 
 
 # ── OpenGraphExtractor response size limits ───────────────────────────
@@ -239,7 +239,7 @@ class TestOpenGraphExtractorSizeLimits:
         )
 
         result = await extractor.extract("https://example.com/products/item")
-        assert result == []
+        assert result.products == []
 
     @respx.mock
     async def test_rejects_response_by_body_length(self):
@@ -252,7 +252,7 @@ class TestOpenGraphExtractorSizeLimits:
         )
 
         result = await extractor.extract("https://example.com/products/item")
-        assert result == []
+        assert result.products == []
 
     @respx.mock
     async def test_accepts_normal_response(self):
@@ -264,8 +264,8 @@ class TestOpenGraphExtractorSizeLimits:
         )
 
         result = await extractor.extract("https://example.com/products/item")
-        assert len(result) == 1
-        assert result[0]["og:title"] == "Test Product"
+        assert len(result.products) == 1
+        assert result.products[0]["og:title"] == "Test Product"
 
 
 # ── Pipeline._fetch_html response size limits ─────────────────────────

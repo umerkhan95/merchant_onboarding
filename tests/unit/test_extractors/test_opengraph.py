@@ -39,8 +39,8 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
-        og_data = result[0]
+        assert len(result.products) == 1
+        og_data = result.products[0]
         assert og_data["og:title"] == "Amazing Product"
         assert og_data["og:description"] == "Best product ever"
         assert og_data["og:image"] == "https://example.com/image.jpg"
@@ -66,8 +66,8 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/minimal")
 
-        assert len(result) == 1
-        og_data = result[0]
+        assert len(result.products) == 1
+        og_data = result.products[0]
         assert og_data["og:title"] == "Minimal Product"
         assert og_data["og:image"] == "https://example.com/img.jpg"
         assert "og:description" not in og_data
@@ -90,7 +90,7 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/no-og")
 
-        assert result == []
+        assert result.products == []
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_product_price_tags(self, extractor, respx_mock):
@@ -111,8 +111,8 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/product-price")
 
-        assert len(result) == 1
-        og_data = result[0]
+        assert len(result.products) == 1
+        og_data = result.products[0]
         assert og_data["product:price:amount"] == "49.99"
         assert og_data["product:price:currency"] == "EUR"
 
@@ -135,8 +135,8 @@ class TestOpenGraphExtractor:
         result = await extractor.extract("https://example.com/empty-content")
 
         # Should skip empty content tags and only extract valid ones
-        assert len(result) == 1
-        og_data = result[0]
+        assert len(result.products) == 1
+        og_data = result.products[0]
         assert "og:title" not in og_data  # Empty content is skipped
         assert og_data["og:description"] == "Valid description"
         assert len(og_data) == 1
@@ -161,8 +161,8 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/mixed")
 
-        assert len(result) == 1
-        og_data = result[0]
+        assert len(result.products) == 1
+        og_data = result.products[0]
         assert og_data["og:title"] == "Mixed Product"
         assert og_data["product:price:amount"] == "99.99"
         assert og_data["product:availability"] == "in stock"
@@ -174,7 +174,7 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/404")
 
-        assert result == []
+        assert result.products == []
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_network_error(self, extractor, respx_mock):
@@ -183,7 +183,7 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/error")
 
-        assert result == []
+        assert result.products == []
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_malformed_meta_tags(self, extractor, respx_mock):
@@ -204,8 +204,8 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/malformed")
 
-        assert len(result) == 1
-        og_data = result[0]
+        assert len(result.products) == 1
+        og_data = result.products[0]
         # Should only extract valid tag
         assert og_data["og:description"] == "Valid"
         assert len(og_data) == 1
@@ -231,8 +231,8 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/redirect")
 
-        assert len(result) == 1
-        assert result[0]["og:title"] == "Redirected Product"
+        assert len(result.products) == 1
+        assert result.products[0]["og:title"] == "Redirected Product"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_all_common_og_tags(self, extractor, respx_mock):
@@ -261,8 +261,8 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/complete")
 
-        assert len(result) == 1
-        og_data = result[0]
+        assert len(result.products) == 1
+        og_data = result.products[0]
         assert len(og_data) == 11
         assert og_data["og:title"] == "Complete Product"
         assert og_data["og:type"] == "product"
@@ -285,7 +285,7 @@ class TestOpenGraphExtractor:
 
         result = await extractor.extract("https://example.com/headers-test")
 
-        assert len(result) == 1
+        assert len(result.products) == 1
         assert route.called
 
         # Verify headers were sent

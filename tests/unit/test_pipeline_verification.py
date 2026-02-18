@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.extractors.base import ExtractorResult
 from app.models.enums import ExtractionTier, JobStatus, Platform
 from app.services.pipeline import Pipeline
 from app.services.platform_detector import PlatformResult
@@ -103,7 +104,7 @@ async def test_tracked_extraction_tags_source_url(pipeline, mock_progress_tracke
 
         product = _complete_product()
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(return_value=[product.copy()])
+        mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[product.copy()]))
         mock_schema_class.return_value = mock_ext
 
         result = await pipeline.run("job-tag", "https://example.com")
@@ -133,7 +134,7 @@ async def test_tracked_extraction_source_url_on_api_tier(pipeline, mock_progress
             "images": [{"src": "https://example.com/img.jpg"}],
         }
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(return_value=[product])
+        mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[product]))
         mock_shopify_class.return_value = mock_ext
 
         result = await pipeline.run("job-api-tag", "https://example.com")
@@ -171,13 +172,13 @@ async def test_tracked_extraction_records_outcomes(pipeline, mock_progress_track
             # First call is probe (returns product), then per-URL tracked calls:
             # p1 → product, p2 → empty, p3 → product
             if call_count == 1:
-                return [product.copy()]  # probe
+                return ExtractorResult(products=[product.copy()])  # probe
             elif call_count == 2:
-                return [product.copy()]  # p1 success
+                return ExtractorResult(products=[product.copy()])  # p1 success
             elif call_count == 3:
-                return []  # p2 empty
+                return ExtractorResult(products=[])  # p2 empty
             else:
-                return [product.copy()]  # p3 success
+                return ExtractorResult(products=[product.copy()])  # p3 success
 
         mock_ext = AsyncMock()
         mock_ext.extract = AsyncMock(side_effect=extract_varying)
@@ -205,13 +206,13 @@ async def test_tracked_extraction_records_errors(pipeline, mock_progress_tracker
         # All tiers fail probe → fall through to CSS
         for cls in [mock_schema_class, mock_og_class]:
             mock = AsyncMock()
-            mock.extract = AsyncMock(return_value=[])
+            mock.extract = AsyncMock(return_value=ExtractorResult(products=[]))
             cls.return_value = mock
 
         # CSS extractor: probe raises error (circuit breaker catches it)
         css_product = _complete_product()
         mock_css = AsyncMock()
-        mock_css.extract = AsyncMock(return_value=[css_product])
+        mock_css.extract = AsyncMock(return_value=ExtractorResult(products=[css_product]))
         mock_css_class.return_value = mock_css
 
         result = await pipeline.run("job-errors", "https://example.com")
@@ -245,14 +246,14 @@ async def test_completeness_triggers_reextraction(pipeline, mock_progress_tracke
             # No images field!
         }
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(return_value=[product])
+        mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[product]))
         mock_shopify_class.return_value = mock_ext
 
         # Mock OG extractor for re-extraction (created inside _targeted_reextract)
         with patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class:
             og_supplement = {"og:image": "https://example.com/filled-img.jpg"}
             mock_og = AsyncMock()
-            mock_og.extract = AsyncMock(return_value=[og_supplement])
+            mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[og_supplement]))
             mock_og_class.return_value = mock_og
 
             result = await pipeline.run("job-reextract", "https://example.com")
@@ -281,13 +282,13 @@ async def test_reextraction_capped_at_50_urls(pipeline, mock_progress_tracker):
             # No image → incomplete
         }
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(side_effect=lambda _url: [dict(product_template)])
+        mock_ext.extract = AsyncMock(side_effect=lambda _url: ExtractorResult(products=[dict(product_template)]))
         mock_schema_class.return_value = mock_ext
 
         # OG extractor should NOT be called since >50 unique URLs need re-extraction
         with patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class:
             mock_og = AsyncMock()
-            mock_og.extract = AsyncMock(return_value=[])
+            mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[]))
             mock_og_class.return_value = mock_og
 
             result = await pipeline.run("job-capped", "https://example.com")
@@ -321,7 +322,7 @@ async def test_verifying_status_in_progress(pipeline, mock_progress_tracker):
             "images": [{"src": "https://example.com/img.jpg"}],
         }
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(return_value=[product])
+        mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[product]))
         mock_shopify_class.return_value = mock_ext
 
         await pipeline.run("job-verify", "https://example.com")
@@ -365,7 +366,7 @@ async def test_reconciliation_stored_in_metadata(pipeline, mock_progress_tracker
             "images": [{"src": "https://example.com/img.jpg"}],
         }
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(return_value=[product])
+        mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[product]))
         mock_shopify_class.return_value = mock_ext
 
         result = await pipeline.run("job-recon", "https://example.com")
@@ -406,7 +407,7 @@ async def test_reconciliation_coverage_in_return_dict(pipeline, mock_progress_tr
             "images": [{"src": "https://example.com/img.jpg"}],
         }
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(return_value=[product])
+        mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[product]))
         mock_shopify_class.return_value = mock_ext
 
         result = await pipeline.run("job-coverage", "https://example.com")
@@ -440,7 +441,7 @@ async def test_extraction_result_contains_audit(pipeline, mock_progress_tracker)
             "images": [{"src": "https://example.com/img.jpg"}],
         }
         mock_ext = AsyncMock()
-        mock_ext.extract = AsyncMock(return_value=[product])
+        mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[product]))
         mock_shopify_class.return_value = mock_ext
 
         # We can verify audit indirectly through reconciliation
@@ -549,7 +550,7 @@ async def test_page_validator_records_not_product_on_empty(pipeline, mock_progre
         # Schema.org probe fails → OG probe fails → CSS fallback
         for cls in [mock_schema_class, mock_og_class]:
             mock = AsyncMock()
-            mock.extract = AsyncMock(return_value=[])
+            mock.extract = AsyncMock(return_value=ExtractorResult(products=[]))
             cls.return_value = mock
 
         # CSS: product1 returns a product, blog-post returns empty
@@ -559,10 +560,10 @@ async def test_page_validator_records_not_product_on_empty(pipeline, mock_progre
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return [product.copy()]  # CSS probe
+                return ExtractorResult(products=[product.copy()])  # CSS probe
             if "product1" in url:
-                return [product.copy()]
-            return []  # blog-post → empty
+                return ExtractorResult(products=[product.copy()])
+            return ExtractorResult(products=[])  # blog-post → empty
 
         mock_css = AsyncMock()
         mock_css.extract = AsyncMock(side_effect=css_varying)
@@ -599,7 +600,7 @@ async def test_page_validator_records_empty_when_valid_product_page(pipeline, mo
 
         for cls in [mock_schema_class, mock_og_class]:
             mock = AsyncMock()
-            mock.extract = AsyncMock(return_value=[])
+            mock.extract = AsyncMock(return_value=ExtractorResult(products=[]))
             cls.return_value = mock
 
         call_count = 0
@@ -608,10 +609,10 @@ async def test_page_validator_records_empty_when_valid_product_page(pipeline, mo
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return [product.copy()]  # CSS probe
+                return ExtractorResult(products=[product.copy()])  # CSS probe
             if "product1" in url:
-                return [product.copy()]
-            return []  # product2 → empty
+                return ExtractorResult(products=[product.copy()])
+            return ExtractorResult(products=[])  # product2 → empty
 
         mock_css = AsyncMock()
         mock_css.extract = AsyncMock(side_effect=css_varying)
@@ -653,14 +654,14 @@ async def test_page_validator_skipped_when_fetch_fails(pipeline, mock_progress_t
 
         for cls in [mock_schema_class, mock_og_class]:
             mock = AsyncMock()
-            mock.extract = AsyncMock(return_value=[])
+            mock.extract = AsyncMock(return_value=ExtractorResult(products=[]))
             cls.return_value = mock
 
         # CSS fallback (no probe): product1 → product, product2 → empty
         async def css_varying(url):
             if "product1" in url:
-                return [product.copy()]
-            return []
+                return ExtractorResult(products=[product.copy()])
+            return ExtractorResult(products=[])
 
         mock_css = AsyncMock()
         mock_css.extract = AsyncMock(side_effect=css_varying)

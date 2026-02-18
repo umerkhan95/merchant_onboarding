@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from app.extractors.base import BaseExtractor
+from app.extractors.base import BaseExtractor, ExtractorResult
 from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
 
 logger = logging.getLogger(__name__)
@@ -26,18 +26,19 @@ class WooCommerceAPIExtractor(BaseExtractor):
         self.timeout = timeout
         self.max_pages = max_pages
 
-    async def extract(self, shop_url: str) -> list[dict]:
+    async def extract(self, shop_url: str) -> ExtractorResult:
         """Fetch all products from WooCommerce Store API with pagination.
 
         Args:
             shop_url: The WooCommerce store URL (e.g., https://example.com)
 
         Returns:
-            List of raw product dicts from WooCommerce Store API
-            Returns empty list on errors (404 = API not exposed, 500 = server error)
+            ExtractorResult with products and pagination metadata
         """
         all_products: list[dict[str, Any]] = []
         base_url = shop_url.rstrip("/")
+        complete = True
+        error: str | None = None
 
         headers = {
             **DEFAULT_HEADERS,
@@ -64,20 +65,29 @@ class WooCommerceAPIExtractor(BaseExtractor):
                         response = await client.get(url)
                         if response.status_code == 429:
                             logger.error(f"Rate limited again on page {page}, stopping extraction")
+                            complete = False
+                            error = f"Rate limited on page {page}"
                             break
 
                     # Handle 404 - Store API not available/exposed
                     if response.status_code == 404:
                         logger.warning(f"Store API not available at {url}, returning empty list")
+                        if not all_products:
+                            complete = False
+                            error = "Store API not available (404)"
                         break
 
                     # Handle server errors
                     if response.status_code >= 500:
                         logger.error(f"Server error {response.status_code} on page {page}, returning empty list")
+                        complete = False
+                        error = f"Server error {response.status_code} on page {page}"
                         break
 
                     if response.status_code != 200:
                         logger.warning(f"HTTP {response.status_code} on page {page}, returning what we have")
+                        complete = False
+                        error = f"HTTP {response.status_code} on page {page}"
                         break
 
                     # Parse JSON response
@@ -85,11 +95,15 @@ class WooCommerceAPIExtractor(BaseExtractor):
                         products = response.json()
                     except Exception as e:
                         logger.error(f"Invalid JSON on page {page}: {e}, returning what we have")
+                        complete = False
+                        error = f"Invalid JSON on page {page}: {e}"
                         break
 
                     # WooCommerce Store API returns array directly (not wrapped)
                     if not isinstance(products, list):
                         logger.error(f"Unexpected response format on page {page}, expected list")
+                        complete = False
+                        error = f"Unexpected response format on page {page}"
                         break
 
                     products_count = len(products)
@@ -115,16 +129,27 @@ class WooCommerceAPIExtractor(BaseExtractor):
                         len(all_products),
                         page - 1,
                     )
+                    complete = False
+                    error = f"Timeout on page {page}"
                     break
                 except httpx.RequestError as e:
                     logger.error(f"Request error on page {page}: {e}, returning what we have")
+                    complete = False
+                    error = f"Request error on page {page}: {e}"
                     break
                 except Exception as e:
                     logger.error(f"Unexpected error on page {page}: {e}, returning what we have")
+                    complete = False
+                    error = f"Unexpected error on page {page}: {e}"
                     break
 
         logger.info(f"Extraction complete: {len(all_products)} total products from {page - 1} pages")
-        return all_products
+        return ExtractorResult(
+            products=all_products,
+            complete=complete,
+            error=error,
+            pages_completed=page - 1 if page > 1 else (1 if all_products else 0),
+        )
 
     async def _wait(self, seconds: int) -> None:
         """Wait for specified seconds (async-friendly).

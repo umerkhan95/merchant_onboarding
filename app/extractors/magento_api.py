@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from app.extractors.base import BaseExtractor
+from app.extractors.base import BaseExtractor, ExtractorResult
 from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
 
 logger = logging.getLogger(__name__)
@@ -28,19 +28,22 @@ class MagentoAPIExtractor(BaseExtractor):
         self.page_size = page_size
         self.max_pages = max_pages
 
-    async def extract(self, shop_url: str) -> list[dict]:
+    async def extract(self, shop_url: str) -> ExtractorResult:
         """Fetch all products from Magento 2 REST API with pagination.
 
         Args:
             shop_url: The Magento store URL (e.g., https://example.com)
 
         Returns:
-            List of raw product dicts from Magento API
-            Returns empty list on errors
+            ExtractorResult with products and pagination metadata
         """
         all_products: list[dict[str, Any]] = []
         base_url = shop_url.rstrip("/")
         current_page = 1
+        complete = True
+        error: str | None = None
+        total_count: int = 0
+        import math
 
         headers = {
             **DEFAULT_HEADERS,
@@ -63,11 +66,16 @@ class MagentoAPIExtractor(BaseExtractor):
                     # Handle 404 - API not available or not exposed
                     if response.status_code == 404:
                         logger.warning(f"Received 404 for {url}, API not available")
+                        if not all_products:
+                            complete = False
+                            error = "API not available (404)"
                         break
 
                     # Handle rate limiting (429)
                     if response.status_code == 429:
                         logger.warning(f"Rate limited on page {current_page}, stopping extraction")
+                        complete = False
+                        error = f"Rate limited on page {current_page}"
                         break
 
                     # Handle server errors
@@ -75,6 +83,8 @@ class MagentoAPIExtractor(BaseExtractor):
                         logger.error(
                             f"Server error {response.status_code} on page {current_page}, stopping extraction"
                         )
+                        complete = False
+                        error = f"Server error {response.status_code} on page {current_page}"
                         break
 
                     # Handle other errors
@@ -82,6 +92,8 @@ class MagentoAPIExtractor(BaseExtractor):
                         logger.warning(
                             f"HTTP {response.status_code} on page {current_page}, returning what we have"
                         )
+                        complete = False
+                        error = f"HTTP {response.status_code} on page {current_page}"
                         break
 
                     # Parse JSON response
@@ -89,6 +101,8 @@ class MagentoAPIExtractor(BaseExtractor):
                         data = response.json()
                     except Exception as e:
                         logger.error(f"Invalid JSON on page {current_page}: {e}, returning what we have")
+                        complete = False
+                        error = f"Invalid JSON on page {current_page}: {e}"
                         break
 
                     # Extract products and total count from response
@@ -121,12 +135,18 @@ class MagentoAPIExtractor(BaseExtractor):
                         len(all_products),
                         current_page - 1,
                     )
+                    complete = False
+                    error = f"Timeout on page {current_page}"
                     break
                 except httpx.RequestError as e:
                     logger.error(f"Request error on page {current_page}: {e}, returning what we have")
+                    complete = False
+                    error = f"Request error on page {current_page}: {e}"
                     break
                 except Exception as e:
                     logger.error(f"Unexpected error on page {current_page}: {e}, returning what we have")
+                    complete = False
+                    error = f"Unexpected error on page {current_page}: {e}"
                     break
 
         if current_page > self.max_pages:
@@ -135,8 +155,20 @@ class MagentoAPIExtractor(BaseExtractor):
                 self.max_pages,
                 len(all_products),
             )
+            complete = False
+            error = f"Reached max_pages limit ({self.max_pages})"
+
+        pages_expected = (
+            math.ceil(total_count / self.page_size) if total_count else None
+        )
 
         logger.info(
             f"Extraction complete: {len(all_products)} total products from {current_page} pages"
         )
-        return all_products
+        return ExtractorResult(
+            products=all_products,
+            complete=complete,
+            error=error,
+            pages_completed=current_page - 1 if current_page > 1 else (1 if all_products else 0),
+            pages_expected=pages_expected,
+        )

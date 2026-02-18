@@ -9,7 +9,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.config import MAX_RESPONSE_SIZE
-from app.extractors.base import BaseExtractor
+from app.extractors.base import BaseExtractor, ExtractorResult
 from app.extractors.browser_config import (
     DEFAULT_HEADERS,
     fetch_html_with_browser,
@@ -125,7 +125,7 @@ class SchemaOrgExtractor(BaseExtractor):
             logger.exception("Schema.org extraction failed for %s: %s", url, e)
             return []
 
-    async def extract(self, url: str, html: str | None = None) -> list[dict]:
+    async def extract(self, url: str, html: str | None = None) -> ExtractorResult:
         """Extract JSON-LD structured data from page.
 
         When pre-fetched HTML is provided, skips the HTTP fetch entirely and parses
@@ -139,10 +139,11 @@ class SchemaOrgExtractor(BaseExtractor):
             html: Optional pre-fetched HTML content (skips HTTP fetch when provided)
 
         Returns:
-            List of raw Product JSON-LD dicts. Empty list on error or if no Product found.
+            ExtractorResult with Product JSON-LD dicts.
         """
         if html is not None:
-            return self.extract_from_html(html, url)
+            products = self.extract_from_html(html, url)
+            return ExtractorResult(products=products)
 
         try:
             headers = {**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()}
@@ -159,7 +160,7 @@ class SchemaOrgExtractor(BaseExtractor):
                         content_length,
                         url,
                     )
-                    return []
+                    return ExtractorResult(products=[], complete=False, error=f"Response too large ({content_length} bytes)")
                 html = response.text
                 if len(html) > MAX_RESPONSE_SIZE:
                     logger.warning(
@@ -167,25 +168,27 @@ class SchemaOrgExtractor(BaseExtractor):
                         len(html),
                         url,
                     )
-                    return []
+                    return ExtractorResult(products=[], complete=False, error=f"Response body too large ({len(html)} chars)")
             finally:
                 if self._client is None:
                     await client.aclose()
 
-            return self.extract_from_html(html, url)
+            products = self.extract_from_html(html, url)
+            return ExtractorResult(products=products)
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (403, 429, 503):
                 logger.warning("Schema.org blocked (%d) for %s, trying browser fallback", e.response.status_code, url)
                 html = await fetch_html_with_browser(url)
                 if html:
-                    return self.extract_from_html(html, url)
+                    products = self.extract_from_html(html, url)
+                    return ExtractorResult(products=products)
             else:
                 logger.error("HTTP %d fetching %s", e.response.status_code, url)
-            return []
+            return ExtractorResult(products=[], complete=False, error=f"HTTP {e.response.status_code}")
         except httpx.RequestError as e:
             logger.error("Request error fetching %s: %s", url, e)
-            return []
+            return ExtractorResult(products=[], complete=False, error=f"Request error: {e}")
         except Exception as e:
             logger.exception("Schema.org extraction failed for %s: %s", url, e)
-            return []
+            return ExtractorResult(products=[], complete=False, error=str(e))

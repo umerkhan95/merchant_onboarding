@@ -12,7 +12,7 @@ from crawl4ai import AsyncWebCrawler, LLMConfig
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
-from app.extractors.base import BaseExtractor
+from app.extractors.base import BaseExtractor, ExtractorResult
 from app.extractors.browser_config import (
     StealthLevel,
     get_browser_config,
@@ -355,18 +355,18 @@ class SmartCSSExtractor(BaseExtractor):
         await self.cache.set(url, schema)
         return schema
 
-    async def extract(self, url: str) -> list[dict]:
+    async def extract(self, url: str) -> ExtractorResult:
         """Extract products using auto-generated CSS selectors.
 
         Args:
             url: Product page URL
 
         Returns:
-            List of raw product dicts. Empty list on error.
+            ExtractorResult with products or error details.
         """
         schema = await self._get_or_generate_schema(url)
         if not schema:
-            return []
+            return ExtractorResult(products=[], complete=False, error="Schema generation failed")
 
         try:
             browser_config = get_browser_config(self.stealth_level)
@@ -385,17 +385,17 @@ class SmartCSSExtractor(BaseExtractor):
 
                 if not result.success:
                     logger.error("SmartCSS crawl failed for %s: %s", url, result.error_message)
-                    return []
+                    return ExtractorResult(products=[], complete=False, error=f"Crawl failed: {result.error_message}")
 
                 if not result.extracted_content:
                     logger.warning("SmartCSS returned no content for %s", url)
-                    return []
+                    return ExtractorResult(products=[], complete=False, error="No content extracted")
 
                 try:
                     extracted = json.loads(result.extracted_content)
                 except json.JSONDecodeError as e:
                     logger.error("Failed to parse SmartCSS output for %s: %s", url, e)
-                    return []
+                    return ExtractorResult(products=[], complete=False, error=f"JSON parse error: {e}")
 
                 if isinstance(extracted, dict):
                     products = [extracted] if extracted else []
@@ -410,29 +410,29 @@ class SmartCSSExtractor(BaseExtractor):
                     if cached:
                         logger.info("SmartCSS cached schema produced 0 results for %s, invalidating", url)
                         await self.cache.invalidate(url)
-                    return []
+                    return ExtractorResult(products=[])
 
                 logger.info("SmartCSS extracted %d products from %s", len(products), url)
-                return products
+                return ExtractorResult(products=products)
 
         except Exception as e:
             logger.exception("SmartCSS extraction failed for %s: %s", url, e)
-            return []
+            return ExtractorResult(products=[], complete=False, error=str(e))
 
-    async def extract_batch(self, urls: list[str]) -> list[dict]:
+    async def extract_batch(self, urls: list[str]) -> ExtractorResult:
         """Extract products from multiple URLs using a single browser instance.
 
         Generates/fetches CSS schema from the first URL, then uses arun_many()
         to crawl all URLs concurrently with that schema.
         """
         if not urls:
-            return []
+            return ExtractorResult(products=[])
 
         # Get or generate schema from first URL with multi-sample validation
         sample_urls = urls[:3] if len(urls) >= 3 else urls
         schema = await self._get_or_generate_schema(urls[0], sample_urls=sample_urls)
         if not schema:
-            return []
+            return ExtractorResult(products=[], complete=False, error="Schema generation failed")
 
         browser_config = get_browser_config(self.stealth_level)
         extraction_strategy = JsonCssExtractionStrategy(schema, verbose=False)
@@ -446,6 +446,7 @@ class SmartCSSExtractor(BaseExtractor):
         )
 
         all_products = []
+        error: str | None = None
         try:
             crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
             async with AsyncWebCrawler(
@@ -472,6 +473,7 @@ class SmartCSSExtractor(BaseExtractor):
                         logger.error("Failed to parse SmartCSS JSON from %s", result.url)
         except Exception as e:
             logger.exception("Batch SmartCSS extraction failed: %s", e)
+            error = str(e)
 
         if not all_products:
             # Invalidate cache if batch produced nothing
@@ -480,4 +482,4 @@ class SmartCSSExtractor(BaseExtractor):
                 logger.info("SmartCSS batch produced 0 results, invalidating cached schema")
                 await self.cache.invalidate(urls[0])
 
-        return all_products
+        return ExtractorResult(products=all_products, complete=error is None, error=error)

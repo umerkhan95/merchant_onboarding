@@ -52,11 +52,11 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
-        assert result[0]["@type"] == "Product"
-        assert result[0]["name"] == "Test Product"
-        assert result[0]["sku"] == "TEST123"
-        assert result[0]["offers"]["price"] == "29.99"
+        assert len(result.products) == 1
+        assert result.products[0]["@type"] == "Product"
+        assert result.products[0]["name"] == "Test Product"
+        assert result.products[0]["sku"] == "TEST123"
+        assert result.products[0]["offers"]["price"] == "29.99"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_multiple_jsonld_blocks(self, extractor, respx_mock):
@@ -97,10 +97,10 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/products")
 
-        assert len(result) == 2
-        assert all(p["@type"] == "Product" for p in result)
-        assert result[0]["name"] == "Product 1"
-        assert result[1]["name"] == "Product 2"
+        assert len(result.products) == 2
+        assert all(p["@type"] == "Product" for p in result.products)
+        assert result.products[0]["name"] == "Product 1"
+        assert result.products[1]["name"] == "Product 2"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_no_product_type_found(self, extractor, respx_mock):
@@ -125,7 +125,7 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/company")
 
-        assert result == []
+        assert result.products == []
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_list_of_objects(self, extractor, respx_mock):
@@ -157,9 +157,9 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/list")
 
-        assert len(result) == 2
-        assert result[0]["name"] == "Product A"
-        assert result[1]["name"] == "Product B"
+        assert len(result.products) == 2
+        assert result.products[0]["name"] == "Product A"
+        assert result.products[1]["name"] == "Product B"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_graph_pattern(self, extractor, respx_mock):
@@ -193,9 +193,9 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/graph")
 
-        assert len(result) == 1
-        assert result[0]["@type"] == "Product"
-        assert result[0]["name"] == "Graph Product"
+        assert len(result.products) == 1
+        assert result.products[0]["@type"] == "Product"
+        assert result.products[0]["name"] == "Graph Product"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_no_jsonld_script_tags(self, extractor, respx_mock):
@@ -216,7 +216,7 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/no-jsonld")
 
-        assert result == []
+        assert result.products == []
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_invalid_json_in_script(self, extractor, respx_mock):
@@ -244,8 +244,8 @@ class TestSchemaOrgExtractor:
         result = await extractor.extract("https://example.com/invalid")
 
         # Should skip invalid JSON and extract valid one
-        assert len(result) == 1
-        assert result[0]["name"] == "Valid Product"
+        assert len(result.products) == 1
+        assert result.products[0]["name"] == "Valid Product"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_http_error(self, extractor, respx_mock):
@@ -254,7 +254,7 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/404")
 
-        assert result == []
+        assert result.products == []
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_network_error(self, extractor, respx_mock):
@@ -263,7 +263,7 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/error")
 
-        assert result == []
+        assert result.products == []
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_mixed_graph_with_products(self, extractor, respx_mock):
@@ -300,9 +300,9 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/mixed")
 
-        assert len(result) == 2
-        assert result[0]["name"] == "Product 1"
-        assert result[1]["name"] == "Product 2"
+        assert len(result.products) == 2
+        assert result.products[0]["name"] == "Product 1"
+        assert result.products[1]["name"] == "Product 2"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_array_type_with_product(self, extractor, respx_mock):
@@ -328,9 +328,9 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/array-type")
 
-        assert len(result) == 1
-        assert result[0]["name"] == "Array Type Product"
-        assert result[0]["sku"] == "ARRAY123"
+        assert len(result.products) == 1
+        assert result.products[0]["name"] == "Array Type Product"
+        assert result.products[0]["sku"] == "ARRAY123"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_full_iri_product_type(self, extractor, respx_mock):
@@ -356,8 +356,8 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/iri-type")
 
-        assert len(result) == 1
-        assert result[0]["name"] == "IRI Product"
+        assert len(result.products) == 1
+        assert result.products[0]["name"] == "IRI Product"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_graph_with_array_types(self, extractor, respx_mock):
@@ -391,8 +391,8 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/graph-array")
 
-        assert len(result) == 1
-        assert result[0]["name"] == "Graph Array Product"
+        assert len(result.products) == 1
+        assert result.products[0]["name"] == "Graph Array Product"
 
     @pytest.mark.respx(base_url="https://example.com")
     async def test_headers_sent(self, extractor, respx_mock):
@@ -416,7 +416,7 @@ class TestSchemaOrgExtractor:
 
         result = await extractor.extract("https://example.com/headers-test")
 
-        assert len(result) == 1
+        assert len(result.products) == 1
         assert route.called
 
         # Verify headers were sent

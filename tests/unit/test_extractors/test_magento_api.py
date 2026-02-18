@@ -38,14 +38,14 @@ async def test_single_page_extraction(extractor: MagentoAPIExtractor, magento_pr
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(200, json=magento_products_fixture))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 2
-        assert products[0]["id"] == 1
-        assert products[0]["sku"] == "MAG-001"
-        assert products[0]["name"] == "Magento Test Product"
-        assert products[1]["id"] == 2
-        assert products[1]["sku"] == "MAG-002"
+        assert len(result.products) == 2
+        assert result.products[0]["id"] == 1
+        assert result.products[0]["sku"] == "MAG-001"
+        assert result.products[0]["name"] == "Magento Test Product"
+        assert result.products[1]["id"] == 2
+        assert result.products[1]["sku"] == "MAG-002"
 
 
 @pytest.mark.asyncio
@@ -74,14 +74,14 @@ async def test_multi_page_pagination_using_total_count(extractor: MagentoAPIExtr
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=2"
         ).mock(return_value=Response(200, json=page2_response))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Should get all 150 products
-        assert len(products) == 150
-        assert products[0]["id"] == 1
-        assert products[99]["id"] == 100
-        assert products[100]["id"] == 101
-        assert products[-1]["id"] == 150
+        assert len(result.products) == 150
+        assert result.products[0]["id"] == 1
+        assert result.products[99]["id"] == 100
+        assert result.products[100]["id"] == 101
+        assert result.products[-1]["id"] == 150
 
 
 @pytest.mark.asyncio
@@ -95,9 +95,9 @@ async def test_empty_response(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(200, json={"items": [], "total_count": 0}))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
 
 
 @pytest.mark.asyncio
@@ -111,9 +111,10 @@ async def test_http_404_returns_empty_list(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(404))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -127,9 +128,10 @@ async def test_http_500_returns_empty_list(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(500))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -143,9 +145,10 @@ async def test_http_429_returns_empty_list(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(429))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -161,9 +164,10 @@ async def test_invalid_json_returns_empty_list(extractor: MagentoAPIExtractor):
             return_value=Response(200, content=b"<html>Not JSON</html>", headers={"Content-Type": "text/html"})
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -178,14 +182,14 @@ async def test_returns_raw_dicts_not_models(
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(200, json=magento_products_fixture))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Verify returns raw dicts
-        assert isinstance(products, list)
-        assert len(products) == 2
+        assert isinstance(result.products, list)
+        assert len(result.products) == 2
 
         # First product should be a dict with expected raw Magento fields
-        product = products[0]
+        product = result.products[0]
         assert isinstance(product, dict)
         assert product["id"] == 1
         assert product["sku"] == "MAG-001"
@@ -208,9 +212,10 @@ async def test_timeout_returns_empty_list(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(side_effect=httpx.TimeoutException("Timeout"))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -224,9 +229,10 @@ async def test_request_error_returns_empty_list(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(side_effect=httpx.RequestError("Connection failed"))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -249,12 +255,12 @@ async def test_partial_extraction_on_error(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=2"
         ).mock(return_value=Response(500))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Should return products from first page only
-        assert len(products) == 100
-        assert products[0]["id"] == 1
-        assert products[-1]["id"] == 100
+        assert len(result.products) == 100
+        assert result.products[0]["id"] == 1
+        assert result.products[-1]["id"] == 100
 
 
 @pytest.mark.asyncio
@@ -270,9 +276,9 @@ async def test_trailing_slash_handling(
             "https://example.com/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(200, json=magento_products_fixture))
 
-        products = await extractor.extract(shop_url_with_slash)
+        result = await extractor.extract(shop_url_with_slash)
 
-        assert len(products) == 2
+        assert len(result.products) == 2
 
 
 @pytest.mark.asyncio
@@ -295,10 +301,10 @@ async def test_stops_when_total_count_reached(extractor: MagentoAPIExtractor):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=2"
         ).mock(return_value=Response(200, json={"items": [], "total_count": 100}))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Should only fetch first page since we reached total_count
-        assert len(products) == 100
+        assert len(result.products) == 100
 
 
 @pytest.mark.asyncio
@@ -313,9 +319,9 @@ async def test_custom_page_size(magento_products_fixture: dict):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=50&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(200, json=magento_products_fixture))
 
-        products = await custom_extractor.extract(shop_url)
+        result = await custom_extractor.extract(shop_url)
 
-        assert len(products) == 2
+        assert len(result.products) == 2
 
 
 @pytest.mark.asyncio
@@ -342,12 +348,12 @@ async def test_max_pages_guard_stops_pagination():
         ).mock(return_value=Response(200, json=page2_response))
         # Page 3 should NOT be requested
 
-        products = await limited_extractor.extract(shop_url)
+        result = await limited_extractor.extract(shop_url)
 
         # Should stop at max_pages=2 with 200 products (not all 300)
-        assert len(products) == 200
-        assert products[0]["id"] == 1
-        assert products[-1]["id"] == 200
+        assert len(result.products) == 200
+        assert result.products[0]["id"] == 1
+        assert result.products[-1]["id"] == 200
 
 
 @pytest.mark.asyncio
@@ -368,10 +374,10 @@ async def test_max_pages_guard_logs_warning_when_limit_reached(caplog):
             f"{shop_url}/rest/V1/products?searchCriteria[pageSize]=100&searchCriteria[currentPage]=1"
         ).mock(return_value=Response(200, json=page1_response))
 
-        products = await limited_extractor.extract(shop_url)
+        result = await limited_extractor.extract(shop_url)
 
         # Should return only page 1 products
-        assert len(products) == 100
+        assert len(result.products) == 100
 
         # Warning should be logged about hitting max_pages
         warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
@@ -404,12 +410,12 @@ async def test_timeout_mid_pagination_logs_warning_with_context():
         handler.setLevel(logging.WARNING)
         logging.getLogger("app.extractors.magento_api").addHandler(handler)
         try:
-            products = await ext.extract(shop_url)
+            result = await ext.extract(shop_url)
         finally:
             logging.getLogger("app.extractors.magento_api").removeHandler(handler)
 
     # Should return partial results
-    assert len(products) == 100
+    assert len(result.products) == 100
 
     # Log should contain product count context (warning, not error)
     log_text = log_output.getvalue()

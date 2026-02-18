@@ -14,7 +14,7 @@ from crawl4ai import (
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
 
-from app.extractors.base import BaseExtractor
+from app.extractors.base import BaseExtractor, ExtractorResult
 from app.extractors.browser_config import (
     StealthLevel,
     get_browser_config,
@@ -167,14 +167,14 @@ class LLMExtractor(BaseExtractor):
 
         return merged
 
-    async def extract(self, url: str) -> list[dict]:
+    async def extract(self, url: str) -> ExtractorResult:
         """Extract products from any page using LLM.
 
         Args:
             url: Product page URL
 
         Returns:
-            List of raw product dicts. Empty list on error.
+            ExtractorResult with products or error details.
         """
         strategy = self._create_strategy()
         try:
@@ -194,17 +194,17 @@ class LLMExtractor(BaseExtractor):
 
                 if not result.success:
                     logger.error("LLM crawl failed for %s: %s", url, result.error_message)
-                    return []
+                    return ExtractorResult(products=[], complete=False, error=f"Crawl failed: {result.error_message}")
 
                 if not result.extracted_content:
                     logger.warning("LLM extraction returned no content for %s", url)
-                    return []
+                    return ExtractorResult(products=[], complete=False, error="No content extracted")
 
                 try:
                     extracted = json.loads(result.extracted_content)
                 except json.JSONDecodeError as e:
                     logger.error("Failed to parse LLM output for %s: %s", url, e)
-                    return []
+                    return ExtractorResult(products=[], complete=False, error=f"JSON parse error: {e}")
 
                 # Normalize to list
                 if isinstance(extracted, dict):
@@ -226,20 +226,20 @@ class LLMExtractor(BaseExtractor):
                     pass
 
                 logger.info("LLM extracted %d products from %s", len(products), url)
-                return products
+                return ExtractorResult(products=products)
 
         except Exception as e:
             logger.exception("LLM extraction failed for %s: %s", url, e)
-            return []
+            return ExtractorResult(products=[], complete=False, error=str(e))
 
-    async def extract_batch(self, urls: list[str]) -> list[dict]:
+    async def extract_batch(self, urls: list[str]) -> ExtractorResult:
         """Extract products from multiple URLs using a single browser instance.
 
         Uses arun_many() with MemoryAdaptiveDispatcher to crawl all URLs
         concurrently — eliminates per-URL browser startup overhead.
         """
         if not urls:
-            return []
+            return ExtractorResult(products=[])
 
         strategy = self._create_strategy()
         browser_config = get_browser_config(self.stealth_level)
@@ -254,6 +254,7 @@ class LLMExtractor(BaseExtractor):
         )
 
         all_products = []
+        error: str | None = None
         try:
             crawler_strategy = get_crawler_strategy(self.stealth_level, browser_config)
             async with AsyncWebCrawler(
@@ -294,5 +295,6 @@ class LLMExtractor(BaseExtractor):
                     pass
         except Exception as e:
             logger.exception("Batch LLM extraction failed: %s", e)
+            error = str(e)
 
-        return all_products
+        return ExtractorResult(products=all_products, complete=error is None, error=error)

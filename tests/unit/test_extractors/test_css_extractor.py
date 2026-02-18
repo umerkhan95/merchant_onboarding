@@ -52,7 +52,7 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert result == [sample_product_data]
+        assert result.products == [sample_product_data]
         mock_crawler.arun.assert_called_once()
 
     async def test_extraction_with_list_response(self, sample_schema):
@@ -76,8 +76,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/products")
 
-        assert result == products
-        assert len(result) == 2
+        assert result.products == products
+        assert len(result.products) == 2
 
     async def test_crawl_failure(self, sample_schema):
         """Test handling of crawl failure."""
@@ -96,7 +96,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/404")
 
-        assert result == []
+        assert result.products == []
+        assert result.complete is False
 
     async def test_no_extracted_content(self, sample_schema):
         """Test handling when no content is extracted."""
@@ -114,7 +115,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/empty")
 
-        assert result == []
+        assert result.products == []
+        assert result.complete is False
 
     async def test_invalid_json_in_extracted_content(self, sample_schema):
         """Test handling of invalid JSON in extracted_content."""
@@ -132,7 +134,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/bad-json")
 
-        assert result == []
+        assert result.products == []
+        assert result.complete is False
 
     async def test_empty_dict_response(self, sample_schema):
         """Test handling when extracted data is an empty dict."""
@@ -150,7 +153,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/empty-dict")
 
-        assert result == []
+        assert result.products == []
+        assert result.complete is False
 
     async def test_empty_list_response(self, sample_schema):
         """Test handling when extracted data is an empty list."""
@@ -168,7 +172,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/empty-list")
 
-        assert result == []
+        assert result.products == []
+        assert result.complete is False
 
     async def test_unexpected_data_type(self, sample_schema):
         """Test handling when extracted data is neither dict nor list."""
@@ -186,7 +191,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/unexpected")
 
-        assert result == []
+        assert result.products == []
+        assert result.complete is False
 
     async def test_exception_during_crawl(self, sample_schema):
         """Test handling of exceptions during crawl."""
@@ -200,7 +206,8 @@ class TestCSSExtractor:
         with patch("app.extractors.css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/error")
 
-        assert result == []
+        assert result.products == []
+        assert result.complete is False
 
 
 class TestCSSExtractorEscalation:
@@ -234,7 +241,7 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == sample_products
+            assert result.products == sample_products
             # Should only be called once at STANDARD level
             mock_crawl.assert_called_once_with("https://example.com/product", StealthLevel.STANDARD)
 
@@ -248,7 +255,7 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == sample_products
+            assert result.products == sample_products
             # Should be called twice: STANDARD then STEALTH
             assert mock_crawl.call_count == 2
             calls = mock_crawl.call_args_list
@@ -265,7 +272,7 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == sample_products
+            assert result.products == sample_products
             # Should be called three times: STANDARD → STEALTH → UNDETECTED
             assert mock_crawl.call_count == 3
             calls = mock_crawl.call_args_list
@@ -283,7 +290,8 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == []
+            assert result.products == []
+            assert result.complete is False
             # Should have tried all three levels
             assert mock_crawl.call_count == 3
             calls = mock_crawl.call_args_list
@@ -300,7 +308,7 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == sample_products
+            assert result.products == sample_products
             # Should only be called once at STEALTH level (skips STANDARD)
             mock_crawl.assert_called_once_with("https://example.com/product", StealthLevel.STEALTH)
 
@@ -313,7 +321,7 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == sample_products
+            assert result.products == sample_products
             # Should only be called once at UNDETECTED level (skips STANDARD and STEALTH)
             mock_crawl.assert_called_once_with("https://example.com/product", StealthLevel.UNDETECTED)
 
@@ -327,7 +335,7 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == sample_products
+            assert result.products == sample_products
             # Should be called twice: STEALTH then UNDETECTED (skips STANDARD)
             assert mock_crawl.call_count == 2
             calls = mock_crawl.call_args_list
@@ -344,7 +352,8 @@ class TestCSSExtractorEscalation:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == []
+            assert result.products == []
+            assert result.complete is False
             # Should only be called once (no escalation possible)
             mock_crawl.assert_called_once_with("https://example.com/product", StealthLevel.UNDETECTED)
 
@@ -414,7 +423,7 @@ class TestCSSExtractorEdgeCases:
 
             result = await extractor.extract("")
 
-            assert result == []
+            assert result.products == []
             # Should still attempt the call (URL validation happens in _crawl_single)
             mock_crawl.assert_called()
 
@@ -429,7 +438,8 @@ class TestCSSExtractorEdgeCases:
             result = await extractor.extract("https://example.com/product")
 
             # None is falsy, so escalation continues and returns []
-            assert result == []
+            assert result.products == []
+            assert result.complete is False
             assert mock_crawl.call_count == 3
 
     async def test_extract_stops_at_first_truthy_result(self, schema, sample_product_data):
@@ -443,6 +453,6 @@ class TestCSSExtractorEdgeCases:
 
             result = await extractor.extract("https://example.com/product")
 
-            assert result == single_product
+            assert result.products == single_product
             # Should stop at STEALTH (doesn't try UNDETECTED)
             assert mock_crawl.call_count == 2

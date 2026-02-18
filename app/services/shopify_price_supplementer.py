@@ -176,7 +176,8 @@ class ShopifyPriceSupplementer:
         """Extract products using circuit breaker for fault tolerance."""
 
         async def extract_fn():
-            return await extractor.extract(url)
+            result = await extractor.extract(url)
+            return result.products
 
         try:
             return await self.circuit_breaker.call(domain, extract_fn)

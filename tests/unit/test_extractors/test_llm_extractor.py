@@ -44,8 +44,8 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
-        assert result[0]["title"] == "Test Product"
+        assert len(result.products) == 1
+        assert result.products[0]["title"] == "Test Product"
 
     async def test_successful_extraction_multiple_products(self, extractor):
         """Test extracting multiple products."""
@@ -67,7 +67,7 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/products")
 
-        assert len(result) == 3
+        assert len(result.products) == 3
 
     async def test_filters_products_without_title(self, extractor):
         """Test that products without title field are filtered out."""
@@ -90,8 +90,8 @@ class TestLLMExtractor:
             result = await extractor.extract("https://example.com/products")
 
         # Only products with "title" key are kept
-        assert len(result) == 1
-        assert result[0]["title"] == "Valid Product"
+        assert len(result.products) == 1
+        assert result.products[0]["title"] == "Valid Product"
 
     async def test_dict_response_with_title(self, extractor):
         """Test handling of single dict response (not in array)."""
@@ -109,8 +109,8 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
-        assert result[0]["title"] == "Single Product"
+        assert len(result.products) == 1
+        assert result.products[0]["title"] == "Single Product"
 
     async def test_dict_response_without_title(self, extractor):
         """Test dict response without title returns empty."""
@@ -128,7 +128,7 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert result == []
+        assert result.products == []
 
     async def test_crawl_failure(self, extractor):
         """Test handling of crawl failure."""
@@ -145,7 +145,7 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/404")
 
-        assert result == []
+        assert result.products == []
 
     async def test_no_extracted_content(self, extractor):
         """Test handling when no content is extracted."""
@@ -161,7 +161,7 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/empty")
 
-        assert result == []
+        assert result.products == []
 
     async def test_invalid_json_response(self, extractor):
         """Test handling of invalid JSON in response."""
@@ -177,7 +177,7 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/bad-json")
 
-        assert result == []
+        assert result.products == []
 
     async def test_unexpected_data_type(self, extractor):
         """Test handling of unexpected data type (not dict or list)."""
@@ -193,7 +193,7 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/unexpected")
 
-        assert result == []
+        assert result.products == []
 
     async def test_exception_during_crawl(self, extractor):
         """Test handling of exceptions during crawl."""
@@ -205,7 +205,7 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/error")
 
-        assert result == []
+        assert result.products == []
 
     async def test_custom_temperature_and_max_tokens(self, mock_llm_config):
         """Test that custom temperature and max_tokens are passed through."""
@@ -240,9 +240,9 @@ class TestLLMExtractor:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/mixed")
 
-        assert len(result) == 2
-        assert result[0]["title"] == "Valid"
-        assert result[1]["title"] == "Also Valid"
+        assert len(result.products) == 2
+        assert result.products[0]["title"] == "Valid"
+        assert result.products[1]["title"] == "Also Valid"
 
     def test_markdown_generator_no_pruning_filter(self, extractor):
         """Test that markdown generator does NOT use PruningContentFilter.
@@ -358,9 +358,9 @@ class TestMergeChunkProducts:
         with patch("app.extractors.llm_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
-        assert result[0]["title"] == "Test Product"
-        assert result[0]["price"] == "$50"
-        assert result[0]["description"] == "Great product"
-        assert result[0]["vendor"] == "TestBrand"
-        assert result[0]["image_url"] == "https://img.jpg"
+        assert len(result.products) == 1
+        assert result.products[0]["title"] == "Test Product"
+        assert result.products[0]["price"] == "$50"
+        assert result.products[0]["description"] == "Great product"
+        assert result.products[0]["vendor"] == "TestBrand"
+        assert result.products[0]["image_url"] == "https://img.jpg"

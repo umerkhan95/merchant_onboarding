@@ -39,13 +39,13 @@ async def test_single_page_extraction(extractor: WooCommerceAPIExtractor, woocom
             return_value=Response(200, json=woocommerce_products_fixture)
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 2
-        assert products[0]["id"] == 101
-        assert products[0]["name"] == "Earl Grey Tea"
-        assert products[1]["id"] == 102
-        assert products[1]["name"] == "Green Tea Jasmine"
+        assert len(result.products) == 2
+        assert result.products[0]["id"] == 101
+        assert result.products[0]["name"] == "Earl Grey Tea"
+        assert result.products[1]["id"] == 102
+        assert result.products[1]["name"] == "Green Tea Jasmine"
 
 
 @pytest.mark.asyncio
@@ -68,13 +68,13 @@ async def test_multi_page_pagination(extractor: WooCommerceAPIExtractor):
             return_value=Response(200, json=page2_products)
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 150
-        assert products[0]["id"] == 1
-        assert products[99]["id"] == 100
-        assert products[100]["id"] == 101
-        assert products[-1]["id"] == 150
+        assert len(result.products) == 150
+        assert result.products[0]["id"] == 1
+        assert result.products[99]["id"] == 100
+        assert result.products[100]["id"] == 101
+        assert result.products[-1]["id"] == 150
 
 
 @pytest.mark.asyncio
@@ -88,9 +88,9 @@ async def test_empty_response(extractor: WooCommerceAPIExtractor):
             return_value=Response(200, json=[])
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
 
 
 @pytest.mark.asyncio
@@ -102,9 +102,11 @@ async def test_store_api_not_available_404(extractor: WooCommerceAPIExtractor):
         # Mock 404 response - Store API not available
         respx.get(f"{shop_url}/wp-json/wc/store/v1/products?per_page=100&page=1").mock(return_value=Response(404))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
+        assert result.error is not None
 
 
 @pytest.mark.asyncio
@@ -121,11 +123,11 @@ async def test_http_429_retries_once(extractor: WooCommerceAPIExtractor, woocomm
             side_effect=[Response(429, headers={"Retry-After": "1"}), Response(200, json=woocommerce_products_fixture)]
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Should retry and succeed
-        assert len(products) == 2
-        assert products[0]["name"] == "Earl Grey Tea"
+        assert len(result.products) == 2
+        assert result.products[0]["name"] == "Earl Grey Tea"
 
 
 @pytest.mark.asyncio
@@ -138,9 +140,10 @@ async def test_http_429_twice_stops_extraction(extractor: WooCommerceAPIExtracto
         route = respx.get(f"{shop_url}/wp-json/wc/store/v1/products?per_page=100&page=1")
         route.mock(side_effect=[Response(429, headers={"Retry-After": "1"}), Response(429)])
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -152,9 +155,10 @@ async def test_http_500_returns_empty_list(extractor: WooCommerceAPIExtractor):
         # Mock 500 response
         respx.get(f"{shop_url}/wp-json/wc/store/v1/products?per_page=100&page=1").mock(return_value=Response(500))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -168,9 +172,10 @@ async def test_invalid_json_returns_empty_list(extractor: WooCommerceAPIExtracto
             return_value=Response(200, content=b"<html>Not JSON</html>", headers={"Content-Type": "text/html"})
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -185,14 +190,14 @@ async def test_returns_raw_dicts_not_models(
             return_value=Response(200, json=woocommerce_products_fixture)
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Verify returns raw dicts
-        assert isinstance(products, list)
-        assert len(products) == 2
+        assert isinstance(result.products, list)
+        assert len(result.products) == 2
 
         # First product should be a dict with expected raw WooCommerce Store API fields
-        product = products[0]
+        product = result.products[0]
         assert isinstance(product, dict)
         assert product["id"] == 101
         assert product["name"] == "Earl Grey Tea"
@@ -217,9 +222,10 @@ async def test_timeout_returns_empty_list(extractor: WooCommerceAPIExtractor):
             side_effect=httpx.TimeoutException("Timeout")
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -233,9 +239,10 @@ async def test_request_error_returns_empty_list(extractor: WooCommerceAPIExtract
             side_effect=httpx.RequestError("Connection failed")
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -261,10 +268,10 @@ async def test_pagination_stops_at_max_pages(extractor: WooCommerceAPIExtractor)
             return_value=Response(200, json=page_products)
         )
 
-        products = await limited_extractor.extract(shop_url)
+        result = await limited_extractor.extract(shop_url)
 
         # Should only get products from 2 pages
-        assert len(products) == 200
+        assert len(result.products) == 200
 
 
 @pytest.mark.asyncio
@@ -284,10 +291,10 @@ async def test_partial_extraction_on_error(extractor: WooCommerceAPIExtractor):
         # Second page fails
         respx.get(f"{shop_url}/wp-json/wc/store/v1/products?per_page=100&page=2").mock(return_value=Response(500))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Should return products from first page only
-        assert len(products) == 100
+        assert len(result.products) == 100
 
 
 @pytest.mark.asyncio
@@ -301,9 +308,9 @@ async def test_trailing_slash_handling(extractor: WooCommerceAPIExtractor, wooco
             return_value=Response(200, json=woocommerce_products_fixture)
         )
 
-        products = await extractor.extract(shop_url_with_slash)
+        result = await extractor.extract(shop_url_with_slash)
 
-        assert len(products) == 2
+        assert len(result.products) == 2
 
 
 @pytest.mark.asyncio
@@ -337,6 +344,7 @@ async def test_unexpected_response_format(extractor: WooCommerceAPIExtractor):
             return_value=Response(200, json={"error": "Something went wrong"})
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False

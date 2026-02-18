@@ -697,6 +697,8 @@ class Pipeline:
         (logged at WARNING, returns []). Other exceptions are re-raised so the
         caller can decide how to handle them.
 
+        Unwraps ExtractorResult — callers receive plain list[dict].
+
         Args:
             extractor: Extractor instance
             url: URL to extract from
@@ -707,7 +709,8 @@ class Pipeline:
         """
 
         async def extract_fn():
-            return await extractor.extract(url)
+            result = await extractor.extract(url)
+            return result.products
 
         try:
             return await self.circuit_breaker.call(domain, extract_fn)
@@ -790,7 +793,8 @@ class Pipeline:
         async def _extract_one(url: str) -> list[dict]:
             try:
                 async def fn():
-                    return await extractor.extract(url)
+                    result = await extractor.extract(url)
+                    return result.products
 
                 async with self.rate_limiter.acquire(domain):
                     products = await self.circuit_breaker.call(domain, fn)

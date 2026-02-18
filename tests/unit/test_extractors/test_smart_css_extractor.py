@@ -84,8 +84,8 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
-        assert result[0]["title"] == "Product 1"
+        assert len(result.products) == 1
+        assert result.products[0]["title"] == "Product 1"
         # Should NOT have called set (schema was cached)
         mock_schema_cache.set.assert_not_called()
 
@@ -119,7 +119,7 @@ class TestSmartCSSExtractor:
         ):
             result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
+        assert len(result.products) == 1
         mock_schema_cache.set.assert_called_once()
 
     async def test_extract_returns_empty_when_schema_generation_fails(
@@ -140,7 +140,7 @@ class TestSmartCSSExtractor:
         ):
             result = await extractor.extract("https://example.com/product")
 
-        assert result == []
+        assert result.products == []
 
     async def test_extract_returns_empty_on_html_fetch_failure(
         self, extractor, mock_schema_cache
@@ -154,7 +154,7 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert result == []
+        assert result.products == []
 
     async def test_invalidates_cache_on_zero_results(
         self, extractor, mock_schema_cache, valid_schema
@@ -169,7 +169,7 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert result == []
+        assert result.products == []
         mock_schema_cache.invalidate.assert_called_once()
 
     async def test_crawl_failure(self, extractor, mock_schema_cache, valid_schema):
@@ -183,7 +183,7 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/timeout")
 
-        assert result == []
+        assert result.products == []
 
     async def test_no_extracted_content(self, extractor, mock_schema_cache, valid_schema):
         """Test handling when crawl returns no content."""
@@ -196,7 +196,7 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/empty")
 
-        assert result == []
+        assert result.products == []
 
     async def test_invalid_json_response(self, extractor, mock_schema_cache, valid_schema):
         """Test handling of invalid JSON in crawl result."""
@@ -209,7 +209,7 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/bad-json")
 
-        assert result == []
+        assert result.products == []
 
     async def test_exception_during_crawl(self, extractor, mock_schema_cache, valid_schema):
         """Test handling of exceptions during crawl."""
@@ -220,7 +220,7 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/crash")
 
-        assert result == []
+        assert result.products == []
 
     async def test_dict_response_wrapped_in_list(self, extractor, mock_schema_cache, valid_schema):
         """Test dict response is wrapped into a list."""
@@ -234,8 +234,8 @@ class TestSmartCSSExtractor:
         with patch("app.extractors.smart_css_extractor.AsyncWebCrawler", return_value=mock_crawler):
             result = await extractor.extract("https://example.com/product")
 
-        assert len(result) == 1
-        assert result[0]["title"] == "Single Product"
+        assert len(result.products) == 1
+        assert result.products[0]["title"] == "Single Product"
 
     async def test_schema_with_invalid_base_selector_rejected(
         self, extractor, mock_schema_cache
@@ -255,7 +255,7 @@ class TestSmartCSSExtractor:
         ):
             result = await extractor.extract("https://example.com/product")
 
-        assert result == []
+        assert result.products == []
 
     def test_score_selector_robustness_attribute_selectors(self):
         """Test robustness scoring favors attribute selectors."""
@@ -412,7 +412,7 @@ class TestSmartCSSExtractor:
 
         # Should have validated schema and cached it
         mock_schema_cache.set.assert_called_once()
-        assert len(result) == 3
+        assert len(result.products) == 3
 
     async def test_low_robustness_schema_rejected(self, extractor, mock_schema_cache):
         """Test that schemas with very low robustness scores (< 0.3) are rejected."""
@@ -440,7 +440,7 @@ class TestSmartCSSExtractor:
             result = await extractor.extract("https://example.com/product")
 
         # Should reject brittle schema with score < 0.3
-        assert result == []
+        assert result.products == []
         # Should NOT cache brittle schema
         mock_schema_cache.set.assert_not_called()
 
@@ -477,8 +477,8 @@ class TestSmartCSSExtractor:
             result = await extractor.extract("https://example.com/product")
 
         # Should accept moderate schema (0.5 >= 0.3 threshold)
-        assert len(result) == 1
-        assert result[0]["title"] == "Product 1"
+        assert len(result.products) == 1
+        assert result.products[0]["title"] == "Product 1"
         # Should cache the schema
         mock_schema_cache.set.assert_called_once()
 

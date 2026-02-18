@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.extractors.base import ExtractorResult
 from app.models.enums import JobStatus, Platform
 from app.services.pipeline import Pipeline
 from app.services.platform_detector import PlatformResult
@@ -98,7 +99,7 @@ async def test_pipeline_shopify_happy_path(pipeline, mock_progress_tracker):
             with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_extractor_class:
                 mock_extractor = AsyncMock()
                 mock_extractor.extract = AsyncMock(
-                    return_value=[
+                    return_value=ExtractorResult(products=[
                         {
                             "id": 123,
                             "title": "Test Product",
@@ -107,7 +108,7 @@ async def test_pipeline_shopify_happy_path(pipeline, mock_progress_tracker):
                             "variants": [{"id": 456, "price": "19.99"}],
                             "images": [{"src": "https://example.com/image.jpg"}],
                         }
-                    ]
+                    ])
                 )
                 mock_extractor_class.return_value = mock_extractor
 
@@ -147,7 +148,7 @@ async def test_pipeline_woocommerce(pipeline, mock_progress_tracker):
             with patch("app.services.pipeline.WooCommerceAPIExtractor") as mock_extractor_class:
                 mock_extractor = AsyncMock()
                 mock_extractor.extract = AsyncMock(
-                    return_value=[
+                    return_value=ExtractorResult(products=[
                         {
                             "id": 789,
                             "name": "WooCommerce Product",
@@ -161,7 +162,7 @@ async def test_pipeline_woocommerce(pipeline, mock_progress_tracker):
                             "description": "Product description",
                             "tags": [],
                         }
-                    ]
+                    ])
                 )
                 mock_extractor_class.return_value = mock_extractor
 
@@ -199,10 +200,10 @@ async def test_pipeline_generic_schema_org_fallback(pipeline, mock_progress_trac
                 }
                 mock_extractor = AsyncMock()
                 # extract() used for probe call
-                mock_extractor.extract = AsyncMock(return_value=[product_data])
+                mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=[product_data]))
                 # extract_batch() used for full extraction
                 mock_extractor.extract_batch = AsyncMock(
-                    return_value=[product_data, product_data]
+                    return_value=ExtractorResult(products=[product_data, product_data])
                 )
                 mock_extractor_class.return_value = mock_extractor
 
@@ -298,14 +299,14 @@ async def test_pipeline_progress_updates_at_each_step(pipeline, mock_progress_tr
             with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_extractor_class:
                 mock_extractor = AsyncMock()
                 mock_extractor.extract = AsyncMock(
-                    return_value=[
+                    return_value=ExtractorResult(products=[
                         {
                             "id": 1,
                             "title": "Product",
                             "handle": "product",
                             "variants": [{"price": "10"}],
                         }
-                    ]
+                    ])
                 )
                 mock_extractor_class.return_value = mock_extractor
 
@@ -341,14 +342,14 @@ async def test_pipeline_without_bulk_ingestor(pipeline_no_ingestor, mock_progres
             with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_extractor_class:
                 mock_extractor = AsyncMock()
                 mock_extractor.extract = AsyncMock(
-                    return_value=[
+                    return_value=ExtractorResult(products=[
                         {
                             "id": 1,
                             "title": "Product",
                             "handle": "product",
                             "variants": [{"price": "10"}],
                         }
-                    ]
+                    ])
                 )
                 mock_extractor_class.return_value = mock_extractor
 
@@ -380,7 +381,7 @@ async def test_pipeline_magento_extraction(pipeline, mock_progress_tracker):
             with patch("app.services.pipeline.MagentoAPIExtractor") as mock_extractor_class:
                 mock_extractor = AsyncMock()
                 mock_extractor.extract = AsyncMock(
-                    return_value=[
+                    return_value=ExtractorResult(products=[
                         {
                             "id": 1,
                             "name": "Magento Product",
@@ -392,7 +393,7 @@ async def test_pipeline_magento_extraction(pipeline, mock_progress_tracker):
                                 {"attribute_code": "url_key", "value": "magento-product"},
                             ],
                         }
-                    ]
+                    ])
                 )
                 mock_extractor_class.return_value = mock_extractor
 
@@ -427,11 +428,11 @@ async def test_pipeline_bigcommerce_css_extraction(pipeline, mock_progress_track
                 patch("app.services.pipeline.CSSExtractor") as mock_css_class,
             ):
                 mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=[])
+                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[]))
                 mock_schema_class.return_value = mock_schema
 
                 mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=[])
+                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[]))
                 mock_og_class.return_value = mock_og
 
                 bc_product = {
@@ -442,9 +443,9 @@ async def test_pipeline_bigcommerce_css_extraction(pipeline, mock_progress_track
                     "sku": "BC-123",
                 }
                 mock_css = AsyncMock()
-                mock_css.extract = AsyncMock(return_value=[bc_product])
+                mock_css.extract = AsyncMock(return_value=ExtractorResult(products=[bc_product]))
                 mock_css.extract_batch = AsyncMock(
-                    return_value=[bc_product, bc_product]
+                    return_value=ExtractorResult(products=[bc_product, bc_product])
                 )
                 mock_css_class.return_value = mock_css
 
@@ -478,7 +479,7 @@ async def test_pipeline_skips_low_quality_probe(pipeline, mock_progress_tracker)
             ):
                 # Schema.org returns products without titles (quality = 0.0)
                 mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=[{"price": "$10"}])
+                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[{"price": "$10"}]))
                 mock_schema_class.return_value = mock_schema
 
                 # OG returns good products (quality > 0.3)
@@ -488,9 +489,9 @@ async def test_pipeline_skips_low_quality_probe(pipeline, mock_progress_tracker)
                     "og:image": "https://example.com/img.jpg",
                 }
                 mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=[og_product])
+                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[og_product]))
                 mock_og.extract_batch = AsyncMock(
-                    return_value=[og_product, og_product]
+                    return_value=ExtractorResult(products=[og_product, og_product])
                 )
                 mock_og_class.return_value = mock_og
 
@@ -532,8 +533,8 @@ async def test_pipeline_needs_review_on_zero_products_after_extraction(
             ):
                 for mock_class in [mock_schema_class, mock_og_class, mock_css_class]:
                     mock_ext = AsyncMock()
-                    mock_ext.extract = AsyncMock(return_value=[])
-                    mock_ext.extract_batch = AsyncMock(return_value=[])
+                    mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[]))
+                    mock_ext.extract_batch = AsyncMock(return_value=ExtractorResult(products=[]))
                     mock_class.return_value = mock_ext
 
                 result = await pipeline.run("job-zero-products", "https://example.com")
@@ -575,7 +576,7 @@ async def test_pipeline_uses_tracked_extraction_for_full_extraction(
 
             with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
                 mock_extractor = AsyncMock()
-                mock_extractor.extract = AsyncMock(return_value=[product_data])
+                mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=[product_data]))
                 mock_schema_class.return_value = mock_extractor
 
                 result = await pipeline.run("job-tracked", "https://example.com")
@@ -605,7 +606,7 @@ async def test_pipeline_shopify_fallback_on_empty_api_response(pipeline, mock_pr
             with patch("app.services.pipeline.ShopifyAPIExtractor") as mock_shopify_class, \
                  patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor", mock_shopify_class):
                 mock_shopify = AsyncMock()
-                mock_shopify.extract = AsyncMock(return_value=[])
+                mock_shopify.extract = AsyncMock(return_value=ExtractorResult(products=[]))
                 mock_shopify_class.return_value = mock_shopify
 
                 # Schema.org returns good data as fallback
@@ -618,9 +619,9 @@ async def test_pipeline_shopify_fallback_on_empty_api_response(pipeline, mock_pr
                         "sku": "FALL-1",
                     }
                     mock_schema = AsyncMock()
-                    mock_schema.extract = AsyncMock(return_value=[product_data])
+                    mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[product_data]))
                     mock_schema.extract_batch = AsyncMock(
-                        return_value=[product_data, product_data]
+                        return_value=ExtractorResult(products=[product_data, product_data])
                     )
                     mock_schema_class.return_value = mock_schema
 
@@ -656,7 +657,7 @@ async def test_pipeline_opengraph_tier_correct(pipeline, mock_progress_tracker):
                 patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
             ):
                 mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=[])
+                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[]))
                 mock_schema_class.return_value = mock_schema
 
                 og_product = {
@@ -666,8 +667,8 @@ async def test_pipeline_opengraph_tier_correct(pipeline, mock_progress_tracker):
                     "og:price:amount": "19.99",
                 }
                 mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=[og_product])
-                mock_og.extract_batch = AsyncMock(return_value=[og_product])
+                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[og_product]))
+                mock_og.extract_batch = AsyncMock(return_value=ExtractorResult(products=[og_product]))
                 mock_og_class.return_value = mock_og
 
                 result = await pipeline.run("job-og-tier", "https://example.com")
@@ -702,7 +703,7 @@ async def test_pipeline_logs_warnings_when_smart_css_and_llm_not_configured(
             ):
                 for mock_class in [mock_schema_class, mock_og_class]:
                     mock_ext = AsyncMock()
-                    mock_ext.extract = AsyncMock(return_value=[])
+                    mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[]))
                     mock_class.return_value = mock_ext
 
                 # CSS returns data so we don't trigger needs_review
@@ -712,7 +713,7 @@ async def test_pipeline_logs_warnings_when_smart_css_and_llm_not_configured(
                     "description": "CSS extracted",
                 }
                 mock_css = AsyncMock()
-                mock_css.extract = AsyncMock(return_value=[css_product])
+                mock_css.extract = AsyncMock(return_value=ExtractorResult(products=[css_product]))
                 mock_css_class.return_value = mock_css
 
                 await pipeline.run("job-warnings", "https://example.com")
@@ -751,7 +752,7 @@ async def test_pipeline_shopify_no_fallback_when_api_has_products(pipeline, mock
                     "images": [{"src": "https://example.com/img.jpg"}],
                 }
                 mock_shopify = AsyncMock()
-                mock_shopify.extract = AsyncMock(return_value=[shopify_product])
+                mock_shopify.extract = AsyncMock(return_value=ExtractorResult(products=[shopify_product]))
                 mock_shopify_class.return_value = mock_shopify
 
                 result = await pipeline.run("job-shopify-no-fallback", "https://example.com")
@@ -863,7 +864,7 @@ async def test_pipeline_merges_partial_probes(pipeline, mock_progress_tracker):
                     "image": "https://example.com/schema-img.jpg",
                 }
                 mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=[schema_product])
+                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[schema_product]))
                 mock_schema_class.return_value = mock_schema
 
                 # OG returns good data (has title → passes quality gate)
@@ -873,9 +874,9 @@ async def test_pipeline_merges_partial_probes(pipeline, mock_progress_tracker):
                     "og:image": "https://example.com/og-img.jpg",
                 }
                 mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=[og_product])
+                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[og_product]))
                 # extract_batch returns same product — should get merged with Schema.org partial
-                mock_og.extract_batch = AsyncMock(return_value=[og_product.copy()])
+                mock_og.extract_batch = AsyncMock(return_value=ExtractorResult(products=[og_product.copy()]))
                 mock_og_class.return_value = mock_og
 
                 result = await pipeline.run("job-merge", "https://example.com")
@@ -985,7 +986,7 @@ async def test_supplement_fills_zero_price(mock_circuit_breaker):
 
     with patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor") as mock_class:
         mock_extractor = AsyncMock()
-        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=api_products))
         mock_class.return_value = mock_extractor
 
         supplementer = ShopifyPriceSupplementer(mock_circuit_breaker)
@@ -1035,7 +1036,7 @@ async def test_supplement_corrects_geo_currency(mock_circuit_breaker):
 
     with patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor") as mock_class:
         mock_extractor = AsyncMock()
-        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=api_products))
         mock_class.return_value = mock_extractor
 
         supplementer = ShopifyPriceSupplementer(mock_circuit_breaker)
@@ -1066,7 +1067,7 @@ async def test_supplement_no_op_when_api_returns_empty(mock_circuit_breaker):
 
     with patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor") as mock_class:
         mock_extractor = AsyncMock()
-        mock_extractor.extract = AsyncMock(return_value=[])
+        mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=[]))
         mock_class.return_value = mock_extractor
 
         supplementer = ShopifyPriceSupplementer(mock_circuit_breaker)
@@ -1100,7 +1101,7 @@ async def test_supplement_no_op_when_all_prices_valid(mock_circuit_breaker):
 
     with patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor") as mock_class:
         mock_extractor = AsyncMock()
-        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=api_products))
         mock_class.return_value = mock_extractor
 
         supplementer = ShopifyPriceSupplementer(mock_circuit_breaker)
@@ -1136,7 +1137,10 @@ async def test_supplement_tries_alternative_url(mock_circuit_breaker):
     with patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor") as mock_class:
         mock_extractor = AsyncMock()
         # First call (main URL) → empty, second call (shop.bombas.com) → products
-        mock_extractor.extract = AsyncMock(side_effect=[[], api_products])
+        mock_extractor.extract = AsyncMock(side_effect=[
+            ExtractorResult(products=[]),
+            ExtractorResult(products=api_products),
+        ])
         mock_class.return_value = mock_extractor
 
         supplementer = ShopifyPriceSupplementer(mock_circuit_breaker)
@@ -1177,7 +1181,7 @@ async def test_supplement_handles_offers_as_list(mock_circuit_breaker):
 
     with patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor") as mock_class:
         mock_extractor = AsyncMock()
-        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=api_products))
         mock_class.return_value = mock_extractor
 
         supplementer = ShopifyPriceSupplementer(mock_circuit_breaker)
@@ -1212,7 +1216,7 @@ async def test_supplement_does_not_overwrite_with_api_zero_price(mock_circuit_br
 
     with patch("app.services.shopify_price_supplementer.ShopifyAPIExtractor") as mock_class:
         mock_extractor = AsyncMock()
-        mock_extractor.extract = AsyncMock(return_value=api_products)
+        mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=api_products))
         mock_class.return_value = mock_extractor
 
         supplementer = ShopifyPriceSupplementer(mock_circuit_breaker)
@@ -1261,7 +1265,11 @@ async def test_pipeline_shopify_fallback_triggers_supplementation(
 
                 mock_shopify = AsyncMock()
                 # Calls: 1) initial API try→empty, 2) supplement main→empty, 3) supplement alt→products
-                mock_shopify.extract = AsyncMock(side_effect=[[], [], api_products])
+                mock_shopify.extract = AsyncMock(side_effect=[
+                    ExtractorResult(products=[]),
+                    ExtractorResult(products=[]),
+                    ExtractorResult(products=api_products),
+                ])
                 mock_shopify_class.return_value = mock_shopify
 
                 # Schema.org returns products but with zero prices (no offers)
@@ -1285,9 +1293,9 @@ async def test_pipeline_shopify_fallback_triggers_supplementation(
                     mock_schema = AsyncMock()
                     mock_schema.extract = AsyncMock(
                         side_effect=[
-                            [schema_product_sock],  # probe
-                            [schema_product_sock],  # URL 1
-                            [schema_product_shirt],  # URL 2
+                            ExtractorResult(products=[schema_product_sock]),  # probe
+                            ExtractorResult(products=[schema_product_sock]),  # URL 1
+                            ExtractorResult(products=[schema_product_shirt]),  # URL 2
                         ]
                     )
                     mock_schema_class.return_value = mock_schema
@@ -1310,7 +1318,7 @@ async def test_circuit_open_error_returns_empty_not_raises(pipeline, mock_progre
     from app.exceptions.errors import CircuitOpenError
 
     extractor = AsyncMock()
-    extractor.extract = AsyncMock(return_value=[{"title": "x"}])
+    extractor.extract = AsyncMock(return_value=ExtractorResult(products=[{"title": "x"}]))
 
     # Make circuit_breaker.call raise CircuitOpenError
     pipeline.circuit_breaker.call = AsyncMock(
@@ -1451,7 +1459,7 @@ async def test_catastrophic_error_rate_not_raised_below_threshold(
         # 4 out of 10 fail (~40% error rate)
         if call_count <= 4:
             raise RuntimeError("fail")
-        return [{"title": "ok", "offers": {"price": "10"}}]
+        return ExtractorResult(products=[{"title": "ok", "offers": {"price": "10"}}])
 
     extractor.extract = AsyncMock(side_effect=partial_fail)
 
@@ -1575,7 +1583,7 @@ async def test_normalization_drop_rate_warning_logged(pipeline, mock_progress_tr
                     for i in range(5)
                 ]
                 mock_shopify = AsyncMock()
-                mock_shopify.extract = AsyncMock(return_value=raw)
+                mock_shopify.extract = AsyncMock(return_value=ExtractorResult(products=raw))
                 mock_shopify_class.return_value = mock_shopify
 
                 # Normalizer drops all but 1 (80% drop rate > 50%)
@@ -1624,7 +1632,7 @@ async def test_normalization_drop_rate_error_logged_above_50_percent(
                     for i in range(10)
                 ]
                 mock_shopify = AsyncMock()
-                mock_shopify.extract = AsyncMock(return_value=raw)
+                mock_shopify.extract = AsyncMock(return_value=ExtractorResult(products=raw))
                 mock_shopify_class.return_value = mock_shopify
 
                 # Normalizer drops 9 out of 10 (90% drop rate)

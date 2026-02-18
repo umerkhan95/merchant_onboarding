@@ -38,13 +38,13 @@ async def test_single_page_extraction(extractor: ShopifyAPIExtractor, shopify_pr
             return_value=Response(200, json=shopify_products_fixture)
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 3
-        assert products[0]["id"] == 1001
-        assert products[0]["title"] == "Tree Runner"
-        assert products[1]["id"] == 1002
-        assert products[2]["id"] == 1003
+        assert len(result.products) == 3
+        assert result.products[0]["id"] == 1001
+        assert result.products[0]["title"] == "Tree Runner"
+        assert result.products[1]["id"] == 1002
+        assert result.products[2]["id"] == 1003
 
 
 @pytest.mark.asyncio
@@ -67,13 +67,13 @@ async def test_multi_page_pagination(extractor: ShopifyAPIExtractor):
             return_value=Response(200, json={"products": page2_products})
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 300
-        assert products[0]["id"] == 1
-        assert products[249]["id"] == 250
-        assert products[250]["id"] == 251
-        assert products[-1]["id"] == 300
+        assert len(result.products) == 300
+        assert result.products[0]["id"] == 1
+        assert result.products[249]["id"] == 250
+        assert result.products[250]["id"] == 251
+        assert result.products[-1]["id"] == 300
 
 
 @pytest.mark.asyncio
@@ -87,9 +87,9 @@ async def test_empty_response(extractor: ShopifyAPIExtractor):
             return_value=Response(200, json={"products": []})
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
 
 
 @pytest.mark.asyncio
@@ -101,9 +101,11 @@ async def test_http_404_returns_empty_list(extractor: ShopifyAPIExtractor):
         # Mock 404 response
         respx.get(f"{shop_url}/products.json?limit=250&page=1").mock(return_value=Response(404))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
+        assert result.error is not None
 
 
 @pytest.mark.asyncio
@@ -120,11 +122,11 @@ async def test_http_429_retries_once(extractor: ShopifyAPIExtractor, shopify_pro
             side_effect=[Response(429, headers={"Retry-After": "1"}), Response(200, json=shopify_products_fixture)]
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Should retry and succeed
-        assert len(products) == 3
-        assert products[0]["title"] == "Tree Runner"
+        assert len(result.products) == 3
+        assert result.products[0]["title"] == "Tree Runner"
 
 
 @pytest.mark.asyncio
@@ -137,9 +139,10 @@ async def test_http_429_twice_stops_extraction(extractor: ShopifyAPIExtractor):
         route = respx.get(f"{shop_url}/products.json?limit=250&page=1")
         route.mock(side_effect=[Response(429, headers={"Retry-After": "1"}), Response(429)])
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -151,9 +154,10 @@ async def test_http_500_returns_empty_list(extractor: ShopifyAPIExtractor):
         # Mock 500 response
         respx.get(f"{shop_url}/products.json?limit=250&page=1").mock(return_value=Response(500))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -167,9 +171,10 @@ async def test_invalid_json_returns_empty_list(extractor: ShopifyAPIExtractor):
             return_value=Response(200, content=b"<html>Not JSON</html>", headers={"Content-Type": "text/html"})
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -182,14 +187,14 @@ async def test_returns_raw_dicts_not_models(extractor: ShopifyAPIExtractor, shop
             return_value=Response(200, json=shopify_products_fixture)
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Verify returns raw dicts
-        assert isinstance(products, list)
-        assert len(products) == 3
+        assert isinstance(result.products, list)
+        assert len(result.products) == 3
 
         # First product should be a dict with expected raw Shopify fields
-        product = products[0]
+        product = result.products[0]
         assert isinstance(product, dict)
         assert product["id"] == 1001
         assert product["title"] == "Tree Runner"
@@ -210,9 +215,10 @@ async def test_timeout_returns_empty_list(extractor: ShopifyAPIExtractor):
         # Mock timeout exception
         respx.get(f"{shop_url}/products.json?limit=250&page=1").mock(side_effect=httpx.TimeoutException("Timeout"))
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -226,9 +232,10 @@ async def test_request_error_returns_empty_list(extractor: ShopifyAPIExtractor):
             side_effect=httpx.RequestError("Connection failed")
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
-        assert len(products) == 0
+        assert len(result.products) == 0
+        assert result.complete is False
 
 
 @pytest.mark.asyncio
@@ -254,10 +261,10 @@ async def test_pagination_stops_at_max_pages(extractor: ShopifyAPIExtractor):
             return_value=Response(200, json={"products": page_products})
         )
 
-        products = await limited_extractor.extract(shop_url)
+        result = await limited_extractor.extract(shop_url)
 
         # Should only get products from 2 pages
-        assert len(products) == 500
+        assert len(result.products) == 500
 
 
 @pytest.mark.asyncio
@@ -280,10 +287,10 @@ async def test_partial_extraction_on_error(extractor: ShopifyAPIExtractor, shopi
             return_value=Response(200, json=large_fixture)
         )
 
-        products = await extractor.extract(shop_url)
+        result = await extractor.extract(shop_url)
 
         # Should return products from first page only
-        assert len(products) == 250
+        assert len(result.products) == 250
 
 
 @pytest.mark.asyncio
@@ -297,9 +304,9 @@ async def test_trailing_slash_handling(extractor: ShopifyAPIExtractor, shopify_p
             return_value=Response(200, json=shopify_products_fixture)
         )
 
-        products = await extractor.extract(shop_url_with_slash)
+        result = await extractor.extract(shop_url_with_slash)
 
-        assert len(products) == 3
+        assert len(result.products) == 3
 
 
 @pytest.mark.asyncio
@@ -328,12 +335,12 @@ async def test_timeout_logs_warning_with_partial_count(extractor: ShopifyAPIExtr
         shopify_logger = logging.getLogger("app.extractors.shopify_api")
         shopify_logger.addHandler(handler)
         try:
-            products = await extractor.extract(shop_url)
+            result = await extractor.extract(shop_url)
         finally:
             shopify_logger.removeHandler(handler)
 
     # Should return partial results from page 1
-    assert len(products) == 250
+    assert len(result.products) == 250
 
     # Log should mention the page count and product count (at WARNING level, not ERROR)
     log_text = log_output.getvalue()
