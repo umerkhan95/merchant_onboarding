@@ -32,6 +32,7 @@ from app.services.platform_detector import PlatformDetector
 from app.services.product_normalizer import ProductNormalizer
 from app.services.reconciliation_reporter import ReconciliationReporter
 from app.services.url_discovery import URLDiscoveryService
+from app.services.url_normalizer import normalize_shop_url
 
 if TYPE_CHECKING:
     from app.db.bulk_ingestor import BulkIngestor
@@ -121,6 +122,7 @@ class Pipeline:
 
     async def _run_inner(self, job_id: str, shop_url: str) -> dict:
         """Inner pipeline logic wrapped by run() with timeout."""
+        shop_url = normalize_shop_url(shop_url)
         logger.info(f"Starting pipeline for job {job_id}, shop URL: {shop_url}")
 
         try:

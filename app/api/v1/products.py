@@ -20,6 +20,7 @@ from app.db.queries import (
     SELECT_PRODUCT_BY_ID,
 )
 from app.exceptions.errors import NotFoundError
+from app.services.url_normalizer import normalize_shop_url
 
 if TYPE_CHECKING:
     from app.db.supabase_client import DatabaseClient
@@ -61,6 +62,8 @@ async def list_products(
     db: DatabaseClient | None = Depends(get_db),
 ) -> dict[str, Any]:
     """List products for a shop with pagination."""
+    shop_id = normalize_shop_url(shop_id)
+
     if db is None:
         return {
             "data": [],
