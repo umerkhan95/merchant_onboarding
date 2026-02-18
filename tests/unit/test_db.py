@@ -147,7 +147,7 @@ class TestBulkIngestor:
 
         mock_conn = AsyncMock()
         mock_conn.execute = AsyncMock(return_value="INSERT 0 1")
-        mock_conn.executemany = AsyncMock()
+        mock_conn.copy_records_to_table = AsyncMock()
 
         @asynccontextmanager
         async def mock_transaction():
@@ -172,7 +172,7 @@ class TestBulkIngestor:
 
         assert result == 1
         mock_conn.execute.assert_any_await(CREATE_STAGING_TABLE)
-        mock_conn.executemany.assert_awaited_once()
+        mock_conn.copy_records_to_table.assert_awaited_once()
         mock_conn.execute.assert_any_await(UPSERT_FROM_STAGING)
 
     @pytest.mark.asyncio
@@ -182,7 +182,7 @@ class TestBulkIngestor:
 
         mock_conn = AsyncMock()
         mock_conn.execute = AsyncMock(return_value="INSERT 0 3")
-        mock_conn.executemany = AsyncMock()
+        mock_conn.copy_records_to_table = AsyncMock()
 
         @asynccontextmanager
         async def mock_transaction():
@@ -218,7 +218,7 @@ class TestBulkIngestor:
 
         mock_conn = AsyncMock()
         mock_conn.execute = AsyncMock(return_value="INSERT 0 500")
-        mock_conn.executemany = AsyncMock()
+        mock_conn.copy_records_to_table = AsyncMock()
 
         @asynccontextmanager
         async def mock_transaction():
@@ -286,13 +286,13 @@ class TestBulkIngestor:
 
         captured_data = None
 
-        async def capture_executemany(query, data):
+        async def capture_copy(table_name, *, records, columns):
             nonlocal captured_data
-            captured_data = data
+            captured_data = records
 
         mock_conn = AsyncMock()
         mock_conn.execute = AsyncMock(return_value="INSERT 0 1")
-        mock_conn.executemany = AsyncMock(side_effect=capture_executemany)
+        mock_conn.copy_records_to_table = AsyncMock(side_effect=capture_copy)
 
         @asynccontextmanager
         async def mock_transaction():

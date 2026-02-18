@@ -105,18 +105,16 @@ class BulkIngestor:
                     for p in products
                 ]
 
-                # Batch insert into staging table (ON CONFLICT to handle dups within batch)
-                await conn.executemany(
-                    """
-                    INSERT INTO staging_products (
-                        external_id, shop_id, platform, title, description, price,
-                        compare_at_price, currency, image_url, product_url, sku,
-                        vendor, product_type, in_stock, variants, tags, raw_data,
-                        scraped_at, idempotency_key
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-                    ON CONFLICT (idempotency_key) DO NOTHING
-                    """,
-                    staging_data,
+                # COPY records into staging table (~50-100K rows/sec vs ~1-5K for executemany)
+                await conn.copy_records_to_table(
+                    "staging_products",
+                    records=staging_data,
+                    columns=[
+                        "external_id", "shop_id", "platform", "title", "description",
+                        "price", "compare_at_price", "currency", "image_url",
+                        "product_url", "sku", "vendor", "product_type", "in_stock",
+                        "variants", "tags", "raw_data", "scraped_at", "idempotency_key",
+                    ],
                 )
 
                 # Upsert from staging to products table

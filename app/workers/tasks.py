@@ -89,12 +89,31 @@ async def _run_pipeline(job_id: str, shop_url: str) -> dict:
         # Initialize bulk ingestor
         bulk_ingestor = BulkIngestor(db_client)
 
+        # Initialize LLM-powered extractors (Tiers 4-5) if API key is configured
+        smart_css_extractor = None
+        llm_extractor = None
+        llm_config = settings.create_llm_config()
+        if llm_config:
+            from app.extractors.schema_cache import SchemaCache
+            from app.extractors.smart_css_extractor import SmartCSSExtractor
+            from app.extractors.llm_extractor import LLMExtractor
+
+            schema_cache = SchemaCache(redis_client=redis_client, ttl=settings.schema_cache_ttl)
+            smart_css_extractor = SmartCSSExtractor(llm_config=llm_config, schema_cache=schema_cache)
+            llm_extractor = LLMExtractor(
+                llm_config=llm_config,
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
+            )
+
         # Create pipeline instance
         pipeline = Pipeline(
             progress_tracker=progress_tracker,
             circuit_breaker=circuit_breaker,
             rate_limiter=rate_limiter,
             bulk_ingestor=bulk_ingestor,
+            smart_css_extractor=smart_css_extractor,
+            llm_extractor=llm_extractor,
         )
 
         # Run pipeline

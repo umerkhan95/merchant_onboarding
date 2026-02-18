@@ -33,6 +33,7 @@ from app.services.page_validator import ProductPageValidator
 from app.services.platform_detector import PlatformDetector
 from app.services.product_normalizer import ProductNormalizer
 from app.services.reconciliation_reporter import ReconciliationReporter
+from app.services.shopify_price_supplementer import ShopifyPriceSupplementer
 from app.services.url_discovery import URLDiscoveryService
 from app.services.url_normalizer import normalize_shop_url
 
@@ -92,6 +93,7 @@ class Pipeline:
         self.ingestor = bulk_ingestor
         self.smart_css = smart_css_extractor
         self.llm_extractor = llm_extractor
+        self._http_client: httpx.AsyncClient | None = None
 
     async def run(
         self, job_id: str, shop_url: str, timeout: int = _PIPELINE_TIMEOUT_SECONDS
@@ -123,10 +125,27 @@ class Pipeline:
             )
             raise
 
+    def _create_http_client(self) -> httpx.AsyncClient:
+        """Create a shared httpx.AsyncClient for the pipeline run."""
+        from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
+
+        return httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=30.0,
+            headers={**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()},
+        )
+
     async def _run_inner(self, job_id: str, shop_url: str) -> dict:
         """Inner pipeline logic wrapped by run() with timeout."""
         shop_url = normalize_shop_url(shop_url)
         logger.info(f"Starting pipeline for job {job_id}, shop URL: {shop_url}")
+
+        # Create a shared HTTP client for the entire pipeline run
+        self._http_client = self._create_http_client()
+
+        # Re-create components with shared client
+        self.detector = PlatformDetector(client=self._http_client)
+        self.discovery = URLDiscoveryService(client=self._http_client)
 
         try:
             # Step 1: Detect platform
@@ -363,6 +382,8 @@ class Pipeline:
             )
 
             raise
+        finally:
+            await self._http_client.aclose()
 
     async def _extract_products(
         self, shop_url: str, platform: Platform, urls: list[str], job_id: str
@@ -401,7 +422,8 @@ class Pipeline:
                 )
                 # Supplement zero-price / geo-currency products with Shopify API pricing
                 if raw_products:
-                    raw_products = await self._supplement_shopify_prices(
+                    supplementer = ShopifyPriceSupplementer(self.circuit_breaker)
+                    raw_products = await supplementer.supplement(
                         raw_products, shop_url
                     )
 
@@ -511,7 +533,7 @@ class Pipeline:
 
         # Tier 2: Schema.org on first URL
         await _set_probe_step("Schema.org")
-        schema_extractor = SchemaOrgExtractor()
+        schema_extractor = SchemaOrgExtractor(client=self._http_client)
         schema_products = await self._extract_with_circuit_breaker(schema_extractor, probe_url, shop_url)
         if self._probe_acceptable(schema_products, "Schema.org"):
             await _commit_tier(ExtractionTier.SCHEMA_ORG)
@@ -524,7 +546,7 @@ class Pipeline:
 
         # Tier 3: OpenGraph on first URL
         await _set_probe_step("OpenGraph")
-        og_extractor = OpenGraphExtractor()
+        og_extractor = OpenGraphExtractor(client=self._http_client)
         og_products = await self._extract_with_circuit_breaker(og_extractor, probe_url, shop_url)
         if self._probe_acceptable(og_products, "OpenGraph"):
             await _commit_tier(ExtractionTier.OPENGRAPH)
@@ -698,34 +720,35 @@ class Pipeline:
         Returns HTML string on success, None on any failure or if the response
         exceeds MAX_RESPONSE_SIZE.
         """
-        from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
-
-        headers = {**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()}
+        client = self._http_client
+        owns_client = client is None
+        if owns_client:
+            client = self._create_http_client()
         try:
-            async with httpx.AsyncClient(
-                follow_redirects=True, timeout=10.0, headers=headers
-            ) as client:
-                resp = await client.get(url)
-                if resp.status_code < 400:
-                    content_length = int(resp.headers.get("content-length", 0))
-                    if content_length > MAX_RESPONSE_SIZE:
-                        logger.warning(
-                            "Response too large (%d bytes) from %s, skipping",
-                            content_length,
-                            url,
-                        )
-                        return None
-                    html = resp.text
-                    if len(html) > MAX_RESPONSE_SIZE:
-                        logger.warning(
-                            "Response body too large (%d chars) from %s, skipping",
-                            len(html),
-                            url,
-                        )
-                        return None
-                    return html
+            resp = await client.get(url)
+            if resp.status_code < 400:
+                content_length = int(resp.headers.get("content-length", 0))
+                if content_length > MAX_RESPONSE_SIZE:
+                    logger.warning(
+                        "Response too large (%d bytes) from %s, skipping",
+                        content_length,
+                        url,
+                    )
+                    return None
+                html = resp.text
+                if len(html) > MAX_RESPONSE_SIZE:
+                    logger.warning(
+                        "Response body too large (%d chars) from %s, skipping",
+                        len(html),
+                        url,
+                    )
+                    return None
+                return html
         except Exception as e:
             logger.debug("HTML fetch for validation failed for %s: %s", url, e)
+        finally:
+            if owns_client:
+                await client.aclose()
         return None
 
     async def _extract_from_urls_tracked(
@@ -765,7 +788,8 @@ class Pipeline:
                 async def fn():
                     return await extractor.extract(url)
 
-                products = await self.circuit_breaker.call(domain, fn)
+                async with self.rate_limiter.acquire(domain):
+                    products = await self.circuit_breaker.call(domain, fn)
                 if products:
                     ExtractionTracker.tag_products_with_source(products, url)
                     tracker.record_success(url, len(products))
@@ -854,7 +878,7 @@ class Pipeline:
 
         # Concurrent re-extraction for missing prices via Schema.org
         if plan.urls_needing_price:
-            schema_extractor = SchemaOrgExtractor()
+            schema_extractor = SchemaOrgExtractor(client=self._http_client)
             results = await asyncio.gather(
                 *[_reextract_url(schema_extractor, u) for u in plan.urls_needing_price]
             )
@@ -866,7 +890,7 @@ class Pipeline:
 
         # Concurrent re-extraction for missing images via OpenGraph
         if plan.urls_needing_image:
-            og_extractor = OpenGraphExtractor()
+            og_extractor = OpenGraphExtractor(client=self._http_client)
             results = await asyncio.gather(
                 *[_reextract_url(og_extractor, u) for u in plan.urls_needing_image]
             )
@@ -911,177 +935,3 @@ class Pipeline:
                 if not Pipeline._is_value_present(product.get(key)):
                     product[key] = val
 
-    # -- Shopify API price supplementation ----------------------------------------
-
-    async def _supplement_shopify_prices(
-        self, raw_products: list[dict], shop_url: str
-    ) -> list[dict]:
-        """Supplement Schema.org products with canonical Shopify API pricing.
-
-        Fixes two issues for Shopify stores that fell back to Schema.org:
-        1. Zero-price: JSON-LD may omit 'offers' entirely (geo-targeting/inventory).
-        2. Geo-currency: JSON-LD may serve location-specific prices (e.g. EUR)
-           instead of the merchant's base catalog currency.
-
-        The Shopify /products.json API always returns canonical base pricing.
-        """
-        api_products = await self._fetch_shopify_api_products(shop_url)
-        if not api_products:
-            return raw_products
-
-        # Build lookups by handle and normalised title
-        api_by_handle: dict[str, dict] = {}
-        api_by_title: dict[str, dict] = {}
-        base_currency = api_products[0].get("_shop_currency", "USD")
-
-        for ap in api_products:
-            handle = ap.get("handle", "").lower().strip()
-            title = ap.get("title", "").strip().lower()
-            if handle:
-                api_by_handle[handle] = ap
-            if title:
-                api_by_title[title] = ap
-
-        filled_count = 0
-        corrected_count = 0
-
-        for product in raw_products:
-            offers = product.get("offers", {})
-            if isinstance(offers, list):
-                offers = offers[0] if offers else {}
-            if not isinstance(offers, dict):
-                offers = {}
-
-            price_raw = str(offers.get("price", "0")) if offers else "0"
-            try:
-                price_val = float(price_raw)
-            except (ValueError, TypeError):
-                price_val = 0.0
-
-            schema_currency = (offers.get("priceCurrency") or "").upper()
-
-            needs_price = price_val == 0
-            needs_currency = bool(
-                schema_currency
-                and base_currency
-                and schema_currency != base_currency.upper()
-            )
-
-            if not needs_price and not needs_currency:
-                continue
-
-            api_match = self._match_shopify_product(
-                product, api_by_handle, api_by_title
-            )
-            if not api_match:
-                continue
-
-            variants = api_match.get("variants", [])
-            api_price = variants[0].get("price", "0") if variants else "0"
-
-            # Don't replace with zero from the API
-            try:
-                if float(api_price) == 0:
-                    continue
-            except (ValueError, TypeError):
-                continue
-
-            # Inject / update offers
-            current_offers = product.get("offers")
-            if not current_offers or (isinstance(current_offers, list) and not current_offers):
-                product["offers"] = {
-                    "price": api_price,
-                    "priceCurrency": base_currency,
-                    "availability": "https://schema.org/InStock",
-                }
-            elif isinstance(current_offers, dict):
-                current_offers["price"] = api_price
-                current_offers["priceCurrency"] = base_currency
-            elif (
-                isinstance(current_offers, list)
-                and current_offers
-                and isinstance(current_offers[0], dict)
-            ):
-                current_offers[0]["price"] = api_price
-                current_offers[0]["priceCurrency"] = base_currency
-
-            if needs_price:
-                filled_count += 1
-            if needs_currency:
-                corrected_count += 1
-
-        if filled_count or corrected_count:
-            logger.info(
-                "Shopify API supplementation: %d zero-price filled, %d geo-currency corrected (base: %s)",
-                filled_count,
-                corrected_count,
-                base_currency,
-            )
-        return raw_products
-
-    async def _fetch_shopify_api_products(self, shop_url: str) -> list[dict]:
-        """Fetch products from Shopify API, trying alternative endpoints for headless stores.
-
-        Headless Shopify stores (Hydrogen/custom) often block /products.json at
-        the main domain but serve it from a shop. subdomain.
-        """
-        from urllib.parse import urlparse
-
-        shopify_extractor = ShopifyAPIExtractor()
-
-        # Try the main URL first
-        try:
-            products = await self._extract_with_circuit_breaker(
-                shopify_extractor, shop_url, shop_url
-            )
-        except Exception:
-            products = []
-        if products:
-            return products
-
-        # Try shop.{base_domain} for headless Shopify stores
-        parsed = urlparse(shop_url)
-        base_domain = parsed.netloc.lower().removeprefix("www.")
-        alt_url = f"{parsed.scheme}://shop.{base_domain}"
-
-        try:
-            products = await self._extract_with_circuit_breaker(
-                shopify_extractor, alt_url, shop_url
-            )
-        except Exception:
-            products = []
-        if products:
-            logger.info(
-                "Shopify API found at alternative endpoint %s (%d products)",
-                alt_url,
-                len(products),
-            )
-            return products
-
-        return []
-
-    @staticmethod
-    def _match_shopify_product(
-        schema_product: dict,
-        api_by_handle: dict[str, dict],
-        api_by_title: dict[str, dict],
-    ) -> dict | None:
-        """Match a Schema.org product to a Shopify API product by URL handle or title."""
-        # Primary: extract handle from product URL
-        product_url = schema_product.get("url", "")
-        if "/products/" in product_url:
-            handle = (
-                product_url.split("/products/")[-1]
-                .rstrip("/")
-                .split("?")[0]
-                .lower()
-            )
-            if handle and handle in api_by_handle:
-                return api_by_handle[handle]
-
-        # Fallback: exact title match (case-insensitive)
-        title = schema_product.get("name", "").strip().lower()
-        if title and title in api_by_title:
-            return api_by_title[title]
-
-        return None

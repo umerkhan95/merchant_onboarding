@@ -34,9 +34,10 @@ CREATE INDEX IF NOT EXISTS idx_products_platform ON products(platform);
 CREATE INDEX IF NOT EXISTS idx_products_idempotency ON products(idempotency_key);
 """
 
-# Staging table for bulk operations
+# Staging table for bulk operations (INCLUDING DEFAULTS only — no constraints/indexes
+# so COPY can load data without ON CONFLICT overhead; dedup handled by final upsert)
 CREATE_STAGING_TABLE = """
-CREATE TEMP TABLE IF NOT EXISTS staging_products (LIKE products INCLUDING ALL) ON COMMIT DROP;
+CREATE TEMP TABLE IF NOT EXISTS staging_products (LIKE products INCLUDING DEFAULTS) ON COMMIT DROP;
 """
 
 # Bulk upsert from staging

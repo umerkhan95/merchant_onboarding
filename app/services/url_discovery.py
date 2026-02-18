@@ -60,9 +60,11 @@ class URLDiscoveryService:
         self,
         timeout: float = 30.0,
         stealth_level: StealthLevel = StealthLevel.STANDARD,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.stealth_level = stealth_level
+        self._client = client
 
     async def discover(self, base_url: str, platform: Platform) -> list[str]:
         """Discover product URLs based on platform.
@@ -95,7 +97,8 @@ class URLDiscoveryService:
         api_url = f"{base_url}/products.json?limit=250&page=1"
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            client = self._client or httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+            try:
                 response = await client.get(api_url)
                 response.raise_for_status()
                 data = response.json()
@@ -111,6 +114,9 @@ class URLDiscoveryService:
                     logger.info("Generated %d Shopify API pagination URLs", len(urls))
 
                 return urls
+            finally:
+                if self._client is None:
+                    await client.aclose()
 
         except httpx.HTTPStatusError as e:
             logger.warning(
@@ -127,11 +133,15 @@ class URLDiscoveryService:
         api_url = f"{base_url}/wp-json/wc/store/v1/products"
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            client = self._client or httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+            try:
                 response = await client.get(api_url)
                 response.raise_for_status()
                 logger.info("WooCommerce Store API accessible at %s", api_url)
                 return [api_url]
+            finally:
+                if self._client is None:
+                    await client.aclose()
         except Exception as e:
             logger.warning("WooCommerce API not accessible: %s, falling back to sitemap", e)
 
@@ -147,11 +157,15 @@ class URLDiscoveryService:
         api_url = f"{base_url}/rest/V1/products?searchCriteria[pageSize]=100"
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            client = self._client or httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+            try:
                 response = await client.get(api_url)
                 response.raise_for_status()
                 logger.info("Magento REST API accessible at %s", api_url)
                 return [api_url]
+            finally:
+                if self._client is None:
+                    await client.aclose()
         except Exception as e:
             logger.warning("Magento API not accessible: %s, falling back to sitemap", e)
 
@@ -246,9 +260,10 @@ class URLDiscoveryService:
         Responses exceeding MAX_RESPONSE_SIZE are skipped to prevent memory exhaustion.
         """
         urls: list[str] = []
-        async with httpx.AsyncClient(
+        client = self._client or httpx.AsyncClient(
             timeout=self.timeout, follow_redirects=True
-        ) as client:
+        )
+        try:
             for path in paths:
                 sitemap_url = f"{base_url}{path}"
                 try:
@@ -279,6 +294,9 @@ class URLDiscoveryService:
                         urls.extend(parsed_urls)
                 except Exception as e:
                     logger.debug("Failed to fetch %s: %s", sitemap_url, e)
+        finally:
+            if self._client is None:
+                await client.aclose()
         return urls
 
     @staticmethod

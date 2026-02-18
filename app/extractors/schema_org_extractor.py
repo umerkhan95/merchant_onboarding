@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 class SchemaOrgExtractor(BaseExtractor):
     """Extract JSON-LD structured data from <script type='application/ld+json'> tags."""
 
+    def __init__(self, client: httpx.AsyncClient | None = None):
+        self._client = client
+
     @staticmethod
     def _is_product_type(type_value) -> bool:
         """Check if JSON-LD @type indicates a Product (handles arrays and IRIs)."""
@@ -122,23 +125,31 @@ class SchemaOrgExtractor(BaseExtractor):
             logger.exception("Schema.org extraction failed for %s: %s", url, e)
             return []
 
-    async def extract(self, url: str) -> list[dict]:
+    async def extract(self, url: str, html: str | None = None) -> list[dict]:
         """Extract JSON-LD structured data from page.
 
-        Tries httpx first (fast). Falls back to browser on HTTP errors (403, timeout)
-        which indicate bot protection or JS-rendered content.
+        When pre-fetched HTML is provided, skips the HTTP fetch entirely and parses
+        the given HTML directly. Otherwise, tries httpx first (fast) and falls back
+        to browser on HTTP errors (403, timeout) indicating bot protection.
 
         Responses exceeding MAX_RESPONSE_SIZE are rejected to prevent memory exhaustion.
 
         Args:
             url: Product page URL
+            html: Optional pre-fetched HTML content (skips HTTP fetch when provided)
 
         Returns:
             List of raw Product JSON-LD dicts. Empty list on error or if no Product found.
         """
+        if html is not None:
+            return self.extract_from_html(html, url)
+
         try:
             headers = {**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()}
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0, headers=headers) as client:
+            client = self._client or httpx.AsyncClient(
+                follow_redirects=True, timeout=30.0, headers=headers
+            )
+            try:
                 response = await client.get(url)
                 response.raise_for_status()
                 content_length = int(response.headers.get("content-length", 0))
@@ -157,6 +168,9 @@ class SchemaOrgExtractor(BaseExtractor):
                         url,
                     )
                     return []
+            finally:
+                if self._client is None:
+                    await client.aclose()
 
             return self.extract_from_html(html, url)
 
