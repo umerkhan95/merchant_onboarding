@@ -94,3 +94,22 @@ SELECT * FROM products WHERE id = $1;
 COUNT_ALL_PRODUCTS = """
 SELECT COUNT(*) FROM products;
 """
+
+# Cleanup: remove invalid products (price=0, no image, no SKU, no external_id)
+# Preserves legitimate free items that have images or SKUs.
+DELETE_INVALID_PRODUCTS = """
+DELETE FROM products
+WHERE price = 0
+  AND (image_url IS NULL OR image_url = '')
+  AND (sku IS NULL OR sku = '')
+  AND (external_id IS NULL OR external_id = '');
+"""
+
+# Count invalid products (for dry-run / preview)
+COUNT_INVALID_PRODUCTS = """
+SELECT COUNT(*) FROM products
+WHERE price = 0
+  AND (image_url IS NULL OR image_url = '')
+  AND (sku IS NULL OR sku = '')
+  AND (external_id IS NULL OR external_id = '');
+"""

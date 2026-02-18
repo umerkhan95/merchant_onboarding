@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.deps import get_db, limiter, require_api_key
 from app.config import settings
+from app.db.bulk_ingestor import BulkIngestor
 from app.db.queries import (
     COUNT_PRODUCTS_BY_DOMAIN,
     COUNT_PRODUCTS_BY_SHOP,
@@ -100,6 +101,43 @@ async def list_products(
         },
         "shop_id": shop_id,
     }
+
+
+@router.get("/cleanup/preview", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
+async def preview_cleanup(
+    request: Request,
+    db: DatabaseClient | None = Depends(get_db),
+) -> dict[str, Any]:
+    """Preview how many invalid products would be cleaned up.
+
+    Invalid = price=0 AND no image AND no SKU AND no external_id.
+    """
+    if db is None:
+        return {"invalid_count": 0, "message": "Database unavailable"}
+
+    ingestor = BulkIngestor(db)
+    count = await ingestor.count_invalid_products()
+    return {"invalid_count": count}
+
+
+@router.delete("/cleanup", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_onboard)
+async def cleanup_invalid_products(
+    request: Request,
+    db: DatabaseClient | None = Depends(get_db),
+) -> dict[str, Any]:
+    """Remove invalid products from the database.
+
+    Deletes products where price=0 AND no image AND no SKU AND no external_id.
+    Legitimate free items with images or SKUs are preserved.
+    """
+    if db is None:
+        return {"deleted_count": 0, "message": "Database unavailable"}
+
+    ingestor = BulkIngestor(db)
+    deleted = await ingestor.cleanup_invalid_products()
+    return {"deleted_count": deleted}
 
 
 @router.get("/{product_id}", dependencies=[require_api_key])

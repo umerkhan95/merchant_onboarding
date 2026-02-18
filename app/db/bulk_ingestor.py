@@ -6,7 +6,12 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from app.db.queries import CREATE_STAGING_TABLE, UPSERT_FROM_STAGING
+from app.db.queries import (
+    COUNT_INVALID_PRODUCTS,
+    CREATE_STAGING_TABLE,
+    DELETE_INVALID_PRODUCTS,
+    UPSERT_FROM_STAGING,
+)
 
 if TYPE_CHECKING:
     from app.db.supabase_client import DatabaseClient
@@ -128,3 +133,27 @@ class BulkIngestor:
             except Exception as e:
                 logger.error(f"Bulk ingest batch failed: {e}")
                 raise RuntimeError(f"Failed to ingest product batch: {e}") from e
+
+    async def count_invalid_products(self) -> int:
+        """Count products that would be removed by cleanup_invalid_products.
+
+        Invalid products have price=0 AND no image AND no SKU AND no external_id.
+        """
+        async with self.db.pool.acquire() as conn:
+            return await conn.fetchval(COUNT_INVALID_PRODUCTS)
+
+    async def cleanup_invalid_products(self) -> int:
+        """Remove invalid products from the database.
+
+        Deletes products where price=0 AND image_url is empty AND sku is empty
+        AND external_id is empty. Legitimate free items with images or SKUs
+        are preserved.
+
+        Returns:
+            Number of deleted rows.
+        """
+        async with self.db.pool.acquire() as conn:
+            result = await conn.execute(DELETE_INVALID_PRODUCTS)
+            deleted = int(result.split()[-1]) if result else 0
+            logger.info("Cleaned up %d invalid products from database", deleted)
+            return deleted
