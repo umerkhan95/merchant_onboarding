@@ -106,6 +106,13 @@ async def _run_pipeline(job_id: str, shop_url: str) -> dict:
                 max_tokens=settings.llm_max_tokens,
             )
 
+        # Initialize LLM budget tracker when LLM extractors are active
+        llm_budget = None
+        if llm_config:
+            from app.infra.llm_budget import LLMBudgetTracker
+
+            llm_budget = LLMBudgetTracker(max_budget=settings.llm_budget_max)
+
         # Create pipeline instance
         pipeline = Pipeline(
             progress_tracker=progress_tracker,
@@ -114,6 +121,7 @@ async def _run_pipeline(job_id: str, shop_url: str) -> dict:
             bulk_ingestor=bulk_ingestor,
             smart_css_extractor=smart_css_extractor,
             llm_extractor=llm_extractor,
+            llm_budget=llm_budget,
         )
 
         # Run pipeline

@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from app.extractors.llm_extractor import LLMExtractor
     from app.extractors.smart_css_extractor import SmartCSSExtractor
     from app.infra.circuit_breaker import CircuitBreaker
+    from app.infra.llm_budget import LLMBudgetTracker
     from app.infra.progress_tracker import ProgressTracker
     from app.infra.rate_limiter import RateLimiter
 
@@ -68,6 +69,7 @@ class Pipeline:
         bulk_ingestor: BulkIngestor | None = None,
         smart_css_extractor: SmartCSSExtractor | None = None,
         llm_extractor: LLMExtractor | None = None,
+        llm_budget: LLMBudgetTracker | None = None,
     ):
         """Initialize pipeline with infrastructure components.
 
@@ -78,6 +80,7 @@ class Pipeline:
             bulk_ingestor: Optional bulk ingestor for database operations
             smart_css_extractor: Optional auto-generating CSS extractor (Tier 4)
             llm_extractor: Optional universal LLM extractor (Tier 5)
+            llm_budget: Optional LLM cost budget tracker (for Tier 4-5)
         """
         self.detector = PlatformDetector()
         self.discovery = URLDiscoveryService()
@@ -93,6 +96,7 @@ class Pipeline:
         self.ingestor = bulk_ingestor
         self.smart_css = smart_css_extractor
         self.llm_extractor = llm_extractor
+        self.llm_budget = llm_budget
         self._http_client: httpx.AsyncClient | None = None
 
     async def run(

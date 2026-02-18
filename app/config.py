@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_temperature: float = 0.2
     llm_max_tokens: int = 4000
+    llm_budget_max: float = 50.0  # Max LLM cost per job (USD)
     schema_cache_ttl: int = 604800  # 7 days in seconds
 
     def create_llm_config(self):
