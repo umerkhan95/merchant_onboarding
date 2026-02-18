@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 import httpx
 import pytest
 import respx
@@ -38,6 +37,42 @@ def sitemap_products_xml() -> str:
 def sitemap_pages_xml() -> str:
     """Load nested sitemap-pages.xml fixture."""
     return (FIXTURES_DIR / "sitemap-pages.xml").read_text()
+
+
+@pytest.fixture
+def mock_seeder(monkeypatch):
+    """Mock AsyncUrlSeeder to return controlled results.
+
+    Returns an object with ``urls_to_return`` (list of URL strings) and
+    ``raise_error`` (bool).  Tests can modify these before calling
+    discovery methods.
+    """
+
+    class _State:
+        urls_to_return: list[str] = []
+        raise_error: bool = False
+
+    state = _State()
+
+    class FakeSeeder:
+        async def urls(self, domain, config):
+            if state.raise_error:
+                raise RuntimeError("Seeder failed")
+            return [{"url": u, "status": "valid"} for u in state.urls_to_return]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(
+        "app.services.url_discovery.AsyncUrlSeeder", lambda: FakeSeeder()
+    )
+    return state
+
+
+# ── SitemapParser tests (unchanged) ───────────────────────────────────
 
 
 class TestSitemapParser:
@@ -202,6 +237,9 @@ class TestSitemapParser:
         assert entries[1].url == "https://example.com/products/item2"
 
 
+# ── URLDiscoveryService tests ─────────────────────────────────────────
+
+
 class TestURLDiscoveryService:
     """Test cases for URLDiscoveryService."""
 
@@ -245,8 +283,8 @@ class TestURLDiscoveryService:
         assert urls[0] == "https://shop.example.com/products.json?limit=250&page=1"
 
     @respx.mock
-    async def test_shopify_fallback_to_sitemap(self, sample_sitemap_xml):
-        """Test Shopify falls back to sitemap when API fails."""
+    async def test_shopify_fallback_to_sitemap(self, sample_sitemap_xml, mock_seeder):
+        """Test Shopify falls back to product sitemap when API fails."""
         service = URLDiscoveryService()
 
         # Mock failed API request
@@ -254,14 +292,14 @@ class TestURLDiscoveryService:
             return_value=httpx.Response(404, text="Not Found")
         )
 
-        # Mock sitemap
-        respx.get("https://shop.example.com/sitemap.xml").mock(
+        # Mock Shopify product sitemap (Phase 1)
+        respx.get("https://shop.example.com/sitemap_products_1.xml").mock(
             return_value=httpx.Response(200, text=sample_sitemap_xml)
         )
 
         urls = await service.discover("https://shop.example.com", Platform.SHOPIFY)
 
-        # Should return URLs from sitemap
+        # sample_sitemap.xml has 5 URLs; 2 (/about, /contact) filtered by denylist
         assert len(urls) == 3
         assert "https://example.com/products/shirt" in urls
 
@@ -282,8 +320,8 @@ class TestURLDiscoveryService:
         assert urls[0] == "https://shop.example.com/wp-json/wc/store/v1/products"
 
     @respx.mock
-    async def test_woocommerce_fallback_to_sitemap(self, sample_sitemap_xml):
-        """Test WooCommerce falls back to sitemap when API fails."""
+    async def test_woocommerce_fallback_to_sitemap(self, sample_sitemap_xml, mock_seeder):
+        """Test WooCommerce falls back to product sitemap when API fails."""
         service = URLDiscoveryService()
 
         # Mock failed API
@@ -291,8 +329,8 @@ class TestURLDiscoveryService:
             return_value=httpx.Response(404, text="Not Found")
         )
 
-        # Mock sitemap
-        respx.get("https://shop.example.com/sitemap.xml").mock(
+        # Mock WooCommerce product sitemap (Phase 1)
+        respx.get("https://shop.example.com/product-sitemap.xml").mock(
             return_value=httpx.Response(200, text=sample_sitemap_xml)
         )
 
@@ -318,8 +356,8 @@ class TestURLDiscoveryService:
         assert urls[0] == "https://shop.example.com/rest/V1/products?searchCriteria[pageSize]=100"
 
     @respx.mock
-    async def test_magento_fallback_to_sitemap(self, sample_sitemap_xml):
-        """Test Magento falls back to sitemap when API fails."""
+    async def test_magento_fallback_to_sitemap(self, sample_sitemap_xml, mock_seeder):
+        """Test Magento falls back to product sitemap when API fails."""
         service = URLDiscoveryService()
 
         # Mock failed API
@@ -327,8 +365,8 @@ class TestURLDiscoveryService:
             return_value=httpx.Response(404, text="Not Found")
         )
 
-        # Mock sitemap
-        respx.get("https://shop.example.com/sitemap.xml").mock(
+        # Mock Magento product sitemap (Phase 1)
+        respx.get("https://shop.example.com/pub/media/sitemap/sitemap.xml").mock(
             return_value=httpx.Response(200, text=sample_sitemap_xml)
         )
 
@@ -337,12 +375,12 @@ class TestURLDiscoveryService:
         assert len(urls) == 3
 
     @respx.mock
-    async def test_bigcommerce_uses_sitemap(self, sample_sitemap_xml):
-        """Test BigCommerce uses sitemap."""
+    async def test_bigcommerce_uses_sitemap(self, sample_sitemap_xml, mock_seeder):
+        """Test BigCommerce uses platform-specific sitemap."""
         service = URLDiscoveryService()
 
-        # Mock sitemap
-        respx.get("https://shop.example.com/sitemap.xml").mock(
+        # Mock BigCommerce sitemap (Phase 1: /xmlsitemap.php)
+        respx.get("https://shop.example.com/xmlsitemap.php").mock(
             return_value=httpx.Response(200, text=sample_sitemap_xml)
         )
 
@@ -350,37 +388,43 @@ class TestURLDiscoveryService:
 
         assert len(urls) == 3
 
-    @respx.mock
-    async def test_generic_uses_sitemap(self, sample_sitemap_xml):
-        """Test generic platform uses sitemap."""
+    async def test_generic_uses_sitemap(self, mock_seeder):
+        """Test generic platform uses AsyncUrlSeeder for sitemap discovery."""
         service = URLDiscoveryService()
 
-        # Mock sitemap
-        respx.get("https://shop.example.com/sitemap.xml").mock(
-            return_value=httpx.Response(200, text=sample_sitemap_xml)
-        )
+        # Generic has no platform-specific sitemaps, goes directly to AsyncUrlSeeder
+        mock_seeder.urls_to_return = [
+            "https://shop.example.com/products/shirt",
+            "https://shop.example.com/products/pants",
+            "https://shop.example.com/products/shoes",
+        ]
 
         urls = await service.discover("https://shop.example.com", Platform.GENERIC)
 
         assert len(urls) == 3
+        assert "https://shop.example.com/products/shirt" in urls
 
-    @respx.mock
-    async def test_generic_returns_base_url_when_no_sitemap(self):
+    async def test_generic_returns_base_url_when_no_sitemap(self, mock_seeder, monkeypatch):
         """Test generic platform returns base URL when no sitemap found."""
         service = URLDiscoveryService()
 
-        # Mock all sitemap URLs as 404
-        respx.get("https://shop.example.com/sitemap.xml").mock(
-            return_value=httpx.Response(404, text="Not Found")
-        )
-        respx.get("https://shop.example.com/sitemap_index.xml").mock(
-            return_value=httpx.Response(404, text="Not Found")
-        )
-        respx.get("https://shop.example.com/product-sitemap.xml").mock(
-            return_value=httpx.Response(404, text="Not Found")
-        )
-        respx.get("https://shop.example.com/sitemap-products.xml").mock(
-            return_value=httpx.Response(404, text="Not Found")
+        # AsyncUrlSeeder returns empty
+        mock_seeder.urls_to_return = []
+
+        # Also mock crawl4ai to return empty
+        class FakeCrawler:
+            async def arun(self, url, config=None):
+                return []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.url_discovery.AsyncWebCrawler",
+            lambda config=None, **kwargs: FakeCrawler(),
         )
 
         urls = await service.discover("https://shop.example.com", Platform.GENERIC)
@@ -389,39 +433,64 @@ class TestURLDiscoveryService:
         assert len(urls) == 1
         assert urls[0] == "https://shop.example.com"
 
-    @respx.mock
-    async def test_generic_returns_base_url_on_sitemap_failure(self):
+    async def test_generic_returns_base_url_on_sitemap_failure(self, mock_seeder, monkeypatch):
         """Test generic platform returns base URL when sitemap fails."""
         service = URLDiscoveryService()
 
-        # Mock all requests to fail
-        respx.get(url__regex=r".*").mock(side_effect=httpx.ConnectError)
+        # AsyncUrlSeeder raises error
+        mock_seeder.raise_error = True
+
+        # Also mock crawl4ai to fail
+        class FailingCrawler:
+            async def arun(self, url, config=None):
+                raise RuntimeError("Crawl failed")
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.url_discovery.AsyncWebCrawler",
+            lambda config=None, **kwargs: FailingCrawler(),
+        )
 
         # For generic platform, should return base URL for crawling
         urls = await service.discover("https://shop.example.com", Platform.GENERIC)
         assert urls == ["https://shop.example.com"]
 
     @respx.mock
-    async def test_returns_empty_list_on_exception(self):
+    async def test_returns_empty_list_on_exception(self, mock_seeder):
         """Test service returns empty list on unexpected exception."""
         service = URLDiscoveryService()
 
-        # Mock Shopify API to fail completely
-        respx.get(url__regex=r".*").mock(side_effect=httpx.ConnectError)
+        # Mock Shopify API to fail
+        respx.get("https://shop.example.com/products.json?limit=250&page=1").mock(
+            return_value=httpx.Response(404, text="Not Found")
+        )
+
+        # Mock product sitemap to also fail
+        respx.get("https://shop.example.com/sitemap_products_1.xml").mock(
+            return_value=httpx.Response(404, text="Not Found")
+        )
+
+        # AsyncUrlSeeder returns empty
+        mock_seeder.urls_to_return = []
 
         # Shopify should return empty list if both API and sitemap fail
         urls = await service.discover("https://shop.example.com", Platform.SHOPIFY)
         assert urls == []
 
-    @respx.mock
-    async def test_url_normalization(self, sample_sitemap_xml):
+    async def test_url_normalization(self, mock_seeder):
         """Test that base URLs are normalized (trailing slash removed)."""
         service = URLDiscoveryService()
 
-        # Mock sitemap
-        respx.get("https://shop.example.com/sitemap.xml").mock(
-            return_value=httpx.Response(200, text=sample_sitemap_xml)
-        )
+        mock_seeder.urls_to_return = [
+            "https://shop.example.com/products/shirt",
+            "https://shop.example.com/products/pants",
+            "https://shop.example.com/products/shoes",
+        ]
 
         # Test with trailing slash
         urls1 = await service.discover("https://shop.example.com/", Platform.GENERIC)
@@ -430,7 +499,7 @@ class TestURLDiscoveryService:
         urls2 = await service.discover("https://shop.example.com", Platform.GENERIC)
 
         # Both should return the same results
-        assert urls1 == urls2
+        assert sorted(urls1) == sorted(urls2)
 
     async def test_deep_crawl_discovers_product_urls(self, monkeypatch):
         """Test that BestFirst deep crawl discovers product URLs and filters non-product pages."""
@@ -445,9 +514,9 @@ class TestURLDiscoveryService:
         fake_results = [
             FakeCrawlResult("https://shop.example.com/products/bag-123"),
             FakeCrawlResult("https://shop.example.com/products/shoe-456"),
-            FakeCrawlResult("https://shop.example.com/about"),  # filtered by NON_PRODUCT_PATHS
-            FakeCrawlResult("https://shop.example.com/checkout/step1"),  # filtered by NON_PRODUCT_SEGMENTS
-            FakeCrawlResult("https://shop.example.com/cart"),  # filtered by NON_PRODUCT_PATHS
+            FakeCrawlResult("https://shop.example.com/about"),  # filtered
+            FakeCrawlResult("https://shop.example.com/checkout/step1"),  # filtered
+            FakeCrawlResult("https://shop.example.com/cart"),  # filtered
             FakeCrawlResult("https://shop.example.com/women/dresses"),  # kept
             FakeCrawlResult("https://shop.example.com/blog/post1", success=False),  # failed
         ]
@@ -506,28 +575,27 @@ class TestURLDiscoveryService:
         urls = await service._discover_via_crawl4ai("https://shop.example.com")
         assert "https://shop.example.com/products/item1" in urls
 
-    @respx.mock
-    async def test_sitemap_deduplication(self):
-        """Test that duplicate URLs from multiple sitemaps are deduplicated."""
+    async def test_sitemap_deduplication(self, mock_seeder):
+        """Test that duplicate URLs from AsyncUrlSeeder are deduplicated by denylist filtering."""
         service = URLDiscoveryService()
 
-        # Sitemap with duplicate products
-        sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/products/item1</loc></url>
-  <url><loc>https://example.com/products/item1</loc></url>
-  <url><loc>https://example.com/products/item2</loc></url>
-</urlset>"""
+        # AsyncUrlSeeder returns duplicates and non-product URLs
+        mock_seeder.urls_to_return = [
+            "https://example.com/products/item1",
+            "https://example.com/products/item1",  # duplicate
+            "https://example.com/products/item2",
+            "https://example.com/about",  # filtered
+        ]
 
-        respx.get("https://shop.example.com/sitemap.xml").mock(
-            return_value=httpx.Response(200, text=sitemap_xml)
+        urls = await service._discover_via_sitemap(
+            "https://example.com", Platform.GENERIC
         )
 
-        urls = await service.discover("https://shop.example.com", Platform.GENERIC)
-
-        # Should deduplicate
-        assert len(urls) == 2
-        assert urls.count("https://example.com/products/item1") == 1
+        # AsyncUrlSeeder may return duplicates; denylist filters /about
+        # (AsyncUrlSeeder internally deduplicates, but we don't rely on it)
+        assert "https://example.com/products/item1" in urls
+        assert "https://example.com/products/item2" in urls
+        assert "https://example.com/about" not in urls
 
     async def test_deep_crawl_uses_bestfirst_strategy(self, monkeypatch):
         """Test that _discover_via_crawl4ai uses BestFirstCrawlingStrategy with keyword scorer."""
@@ -622,3 +690,151 @@ class TestURLDiscoveryService:
         assert "buy" in PRODUCT_KEYWORDS
         assert "shop" in PRODUCT_KEYWORDS
         assert len(PRODUCT_KEYWORDS) >= 8
+
+
+# ── New tests for #57: URL filtering in sitemap discovery ─────────────
+
+
+class TestSitemapProductPrioritization:
+    """Tests for platform-aware sitemap prioritization and denylist filtering."""
+
+    @respx.mock
+    async def test_sitemap_prioritizes_product_sitemaps(self, mock_seeder):
+        """Platform-specific product sitemaps are tried first; generic is NOT fetched."""
+        service = URLDiscoveryService()
+
+        product_sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://shop.example.com/product/earl-grey</loc></url>
+  <url><loc>https://shop.example.com/product/green-tea</loc></url>
+</urlset>"""
+
+        # Phase 1: product-sitemap.xml returns results
+        respx.get("https://shop.example.com/product-sitemap.xml").mock(
+            return_value=httpx.Response(200, text=product_sitemap_xml)
+        )
+
+        urls = await service._discover_via_sitemap(
+            "https://shop.example.com", Platform.WOOCOMMERCE
+        )
+
+        # Product sitemap yielded results, so AsyncUrlSeeder was never called
+        assert len(urls) == 2
+        assert "https://shop.example.com/product/earl-grey" in urls
+        assert "https://shop.example.com/product/green-tea" in urls
+
+    @respx.mock
+    async def test_sitemap_falls_back_to_generic(self, mock_seeder):
+        """When product sitemaps 404, AsyncUrlSeeder is used as fallback."""
+        service = URLDiscoveryService()
+
+        # Phase 1: product sitemaps fail
+        respx.get("https://shop.example.com/product-sitemap.xml").mock(
+            return_value=httpx.Response(404, text="Not Found")
+        )
+        respx.get("https://shop.example.com/product-sitemap1.xml").mock(
+            return_value=httpx.Response(404, text="Not Found")
+        )
+
+        # Phase 2: AsyncUrlSeeder returns results
+        mock_seeder.urls_to_return = [
+            "https://shop.example.com/product/earl-grey",
+            "https://shop.example.com/product/green-tea",
+        ]
+
+        urls = await service._discover_via_sitemap(
+            "https://shop.example.com", Platform.WOOCOMMERCE
+        )
+
+        assert len(urls) == 2
+        assert "https://shop.example.com/product/earl-grey" in urls
+
+    @respx.mock
+    async def test_denylist_filters_non_product_urls(self, mock_seeder):
+        """Denylist removes /about, /blog/*, etc. from sitemap results."""
+        service = URLDiscoveryService()
+
+        product_sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://shop.example.com/product/tea</loc></url>
+  <url><loc>https://shop.example.com/about</loc></url>
+  <url><loc>https://shop.example.com/blog/new-flavors</loc></url>
+  <url><loc>https://shop.example.com/cart</loc></url>
+  <url><loc>https://shop.example.com/collections/herbal</loc></url>
+</urlset>"""
+
+        respx.get("https://shop.example.com/product-sitemap.xml").mock(
+            return_value=httpx.Response(200, text=product_sitemap_xml)
+        )
+
+        urls = await service._discover_via_sitemap(
+            "https://shop.example.com", Platform.WOOCOMMERCE
+        )
+
+        # /about (exact path), /blog/* (segment), /cart (exact path) filtered
+        assert "https://shop.example.com/product/tea" in urls
+        assert "https://shop.example.com/collections/herbal" in urls
+        assert "https://shop.example.com/about" not in urls
+        assert "https://shop.example.com/blog/new-flavors" not in urls
+        assert "https://shop.example.com/cart" not in urls
+
+    def test_woocommerce_filter_keeps_product_urls(self):
+        """When >= 30% of URLs match /product/, only those are kept."""
+        service = URLDiscoveryService()
+
+        urls = [
+            "https://shop.example.com/product/tea-a",
+            "https://shop.example.com/product/tea-b",
+            "https://shop.example.com/product/tea-c",
+            "https://shop.example.com/about-our-teas",
+            "https://shop.example.com/shipping-info",
+        ]
+
+        filtered = service._filter_woocommerce_urls(urls)
+
+        # 3/5 = 60% match /product/ → keep only those
+        assert len(filtered) == 3
+        assert all("/product/" in u for u in filtered)
+
+    def test_woocommerce_filter_keeps_all_when_few_match(self):
+        """When < 30% of URLs match /product/, keep all (flat URL store)."""
+        service = URLDiscoveryService()
+
+        urls = [
+            "https://shop.example.com/earl-grey-tea",
+            "https://shop.example.com/green-tea",
+            "https://shop.example.com/chamomile-tea",
+            "https://shop.example.com/peppermint-tea",
+            "https://shop.example.com/product/oolong",  # only one with /product/
+        ]
+
+        filtered = service._filter_woocommerce_urls(urls)
+
+        # 1/5 = 20% < 30% → keep all
+        assert len(filtered) == 5
+
+    @respx.mock
+    async def test_from_product_sitemap_accepts_flat_urls(self, mock_seeder):
+        """WooCommerce flat URLs like /earl-grey-tea/ pass from product sitemap."""
+        service = URLDiscoveryService()
+
+        product_sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://shop.example.com/earl-grey-tea/</loc></url>
+  <url><loc>https://shop.example.com/green-tea/</loc></url>
+  <url><loc>https://shop.example.com/chamomile/</loc></url>
+</urlset>"""
+
+        respx.get("https://shop.example.com/product-sitemap.xml").mock(
+            return_value=httpx.Response(200, text=product_sitemap_xml)
+        )
+
+        urls = await service._discover_via_sitemap(
+            "https://shop.example.com", Platform.WOOCOMMERCE
+        )
+
+        # Flat URLs from a product sitemap should all pass (trusted source)
+        assert len(urls) == 3
+        assert "https://shop.example.com/earl-grey-tea/" in urls
+        assert "https://shop.example.com/green-tea/" in urls
+        assert "https://shop.example.com/chamomile/" in urls

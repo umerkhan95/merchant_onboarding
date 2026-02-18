@@ -1,17 +1,27 @@
 """URL discovery service for e-commerce platforms.
 
-Uses crawl4ai for browser-based link discovery when API and sitemap strategies fail.
-BestFirstCrawlingStrategy prioritizes product-like URLs via keyword scoring.
+Uses platform-specific product sitemaps, crawl4ai AsyncUrlSeeder for generic
+sitemap discovery, and BestFirstCrawlingStrategy for browser-based link
+discovery when API and sitemap strategies fail.
+
+Non-product URLs (blog posts, about pages, etc.) are filtered via a shared
+denylist in ``url_filters``.
 """
 
 from __future__ import annotations
 
 import logging
+import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
 import httpx
-from crawl4ai import AsyncWebCrawler
-from crawl4ai.deep_crawling import BestFirstCrawlingStrategy, FilterChain, DomainFilter, URLPatternFilter
+from crawl4ai import AsyncUrlSeeder, AsyncWebCrawler, SeedingConfig
+from crawl4ai.deep_crawling import (
+    BestFirstCrawlingStrategy,
+    DomainFilter,
+    FilterChain,
+    URLPatternFilter,
+)
 from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
 
 from app.extractors.browser_config import (
@@ -21,24 +31,15 @@ from app.extractors.browser_config import (
     get_crawler_strategy,
 )
 from app.models.enums import Platform
-from app.services.sitemap_parser import SitemapParser
+from app.services.url_filters import (
+    PLATFORM_PRODUCT_SITEMAPS,
+    is_non_product_url,
+)
 
 logger = logging.getLogger(__name__)
 
-# Paths that are never product pages
-NON_PRODUCT_PATHS = {
-    "/", "/about", "/about-us", "/contact", "/contact-us", "/blog", "/cart",
-    "/checkout", "/account", "/login", "/register", "/search", "/faq",
-    "/privacy-policy", "/terms", "/terms-of-service", "/shipping", "/returns",
-    "/sitemap", "/brands", "/categories", "/pages", "/wishlist", "/compare",
-    "/basket", "/help", "/support", "/careers", "/press",
-}
-
-# Path segments that indicate non-product pages
-NON_PRODUCT_SEGMENTS = {
-    "checkout", "basket", "cart", "login", "register", "account",
-    "blog", "faq", "help", "support", "careers", "press",
-}
+# XML namespace used in standard sitemaps
+_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # Keywords that indicate product-relevant pages (used by BestFirst scorer)
 PRODUCT_KEYWORDS = [
@@ -50,13 +51,16 @@ PRODUCT_KEYWORDS = [
 class URLDiscoveryService:
     """Discover product URLs based on e-commerce platform.
 
-    Strategy chain: Platform API → Sitemap → crawl4ai browser crawl.
+    Strategy chain: Platform API -> Sitemap -> crawl4ai browser crawl.
     """
 
-    def __init__(self, timeout: float = 30.0, stealth_level: StealthLevel = StealthLevel.STANDARD):
+    def __init__(
+        self,
+        timeout: float = 30.0,
+        stealth_level: StealthLevel = StealthLevel.STANDARD,
+    ):
         self.timeout = timeout
         self.stealth_level = stealth_level
-        self.sitemap_parser = SitemapParser(timeout=timeout)
 
     async def discover(self, base_url: str, platform: Platform) -> list[str]:
         """Discover product URLs based on platform.
@@ -65,26 +69,26 @@ class URLDiscoveryService:
             List of product URLs or API endpoints to scrape.
         """
         base_url = base_url.rstrip("/")
-        logger.info(f"Discovering URLs for {base_url} (platform: {platform})")
+        logger.info("Discovering URLs for %s (platform: %s)", base_url, platform)
 
         try:
             if platform == Platform.SHOPIFY:
-                return await self._discover_shopify(base_url)
+                return await self._discover_shopify(base_url, platform)
             elif platform == Platform.WOOCOMMERCE:
-                return await self._discover_woocommerce(base_url)
+                return await self._discover_woocommerce(base_url, platform)
             elif platform == Platform.MAGENTO:
-                return await self._discover_magento(base_url)
+                return await self._discover_magento(base_url, platform)
             elif platform == Platform.BIGCOMMERCE:
-                return await self._discover_bigcommerce(base_url)
+                return await self._discover_bigcommerce(base_url, platform)
             else:
-                return await self._discover_generic(base_url)
+                return await self._discover_generic(base_url, platform)
         except Exception as e:
-            logger.error(f"Error discovering URLs for {base_url}: {e}")
+            logger.error("Error discovering URLs for %s: %s", base_url, e)
             return []
 
     # ── Platform-specific strategies ──────────────────────────────────
 
-    async def _discover_shopify(self, base_url: str) -> list[str]:
+    async def _discover_shopify(self, base_url: str, platform: Platform) -> list[str]:
         """Shopify: /products.json API with pagination."""
         api_url = f"{base_url}/products.json?limit=250&page=1"
 
@@ -96,75 +100,78 @@ class URLDiscoveryService:
 
                 products = data.get("products", [])
                 product_count = len(products)
-                logger.info(f"Shopify first page returned {product_count} products")
+                logger.info("Shopify first page returned %d products", product_count)
 
                 urls = [f"{base_url}/products.json?limit=250&page=1"]
                 if product_count == 250:
                     for page in range(2, 11):
                         urls.append(f"{base_url}/products.json?limit=250&page={page}")
-                    logger.info(f"Generated {len(urls)} Shopify API pagination URLs")
+                    logger.info("Generated %d Shopify API pagination URLs", len(urls))
 
                 return urls
 
         except httpx.HTTPStatusError as e:
-            logger.warning(f"Shopify API not accessible ({e.response.status_code}), falling back to sitemap")
-            return await self._discover_via_sitemap(base_url)
+            logger.warning(
+                "Shopify API not accessible (%s), falling back to sitemap",
+                e.response.status_code,
+            )
+            return await self._discover_via_sitemap(base_url, platform)
         except Exception as e:
-            logger.error(f"Error probing Shopify API: {e}")
-            return await self._discover_via_sitemap(base_url)
+            logger.error("Error probing Shopify API: %s", e)
+            return await self._discover_via_sitemap(base_url, platform)
 
-    async def _discover_woocommerce(self, base_url: str) -> list[str]:
-        """WooCommerce: Store API → sitemap → crawl4ai."""
+    async def _discover_woocommerce(self, base_url: str, platform: Platform) -> list[str]:
+        """WooCommerce: Store API -> sitemap -> crawl4ai."""
         api_url = f"{base_url}/wp-json/wc/store/v1/products"
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
                 response = await client.get(api_url)
                 response.raise_for_status()
-                logger.info(f"WooCommerce Store API accessible at {api_url}")
+                logger.info("WooCommerce Store API accessible at %s", api_url)
                 return [api_url]
         except Exception as e:
-            logger.warning(f"WooCommerce API not accessible: {e}, falling back to sitemap")
+            logger.warning("WooCommerce API not accessible: %s, falling back to sitemap", e)
 
-        urls = await self._discover_via_sitemap(base_url)
+        urls = await self._discover_via_sitemap(base_url, platform)
         if urls:
-            return urls
+            return self._filter_woocommerce_urls(urls)
 
-        logger.info(f"No sitemap products for {base_url}, falling back to crawl4ai")
+        logger.info("No sitemap products for %s, falling back to crawl4ai", base_url)
         return await self._discover_via_crawl4ai(base_url)
 
-    async def _discover_magento(self, base_url: str) -> list[str]:
-        """Magento: REST API → sitemap → crawl4ai."""
+    async def _discover_magento(self, base_url: str, platform: Platform) -> list[str]:
+        """Magento: REST API -> sitemap -> crawl4ai."""
         api_url = f"{base_url}/rest/V1/products?searchCriteria[pageSize]=100"
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
                 response = await client.get(api_url)
                 response.raise_for_status()
-                logger.info(f"Magento REST API accessible at {api_url}")
+                logger.info("Magento REST API accessible at %s", api_url)
                 return [api_url]
         except Exception as e:
-            logger.warning(f"Magento API not accessible: {e}, falling back to sitemap")
+            logger.warning("Magento API not accessible: %s, falling back to sitemap", e)
 
-        urls = await self._discover_via_sitemap(base_url)
+        urls = await self._discover_via_sitemap(base_url, platform)
         if urls:
             return urls
 
-        logger.info(f"No sitemap products for {base_url}, falling back to crawl4ai")
+        logger.info("No sitemap products for %s, falling back to crawl4ai", base_url)
         return await self._discover_via_crawl4ai(base_url)
 
-    async def _discover_bigcommerce(self, base_url: str) -> list[str]:
-        """BigCommerce: sitemap → crawl4ai (flat URL structure, no /product/ prefix)."""
-        urls = await self._discover_via_sitemap(base_url)
+    async def _discover_bigcommerce(self, base_url: str, platform: Platform) -> list[str]:
+        """BigCommerce: sitemap -> crawl4ai (flat URL structure)."""
+        urls = await self._discover_via_sitemap(base_url, platform)
         if urls:
             return urls
 
-        logger.info(f"No sitemap for {base_url}, falling back to crawl4ai")
+        logger.info("No sitemap for %s, falling back to crawl4ai", base_url)
         return await self._discover_via_crawl4ai(base_url)
 
-    async def _discover_generic(self, base_url: str) -> list[str]:
-        """Generic: sitemap → crawl4ai → base URL fallback."""
-        urls = await self._discover_via_sitemap(base_url)
+    async def _discover_generic(self, base_url: str, platform: Platform) -> list[str]:
+        """Generic: sitemap -> crawl4ai -> base URL fallback."""
+        urls = await self._discover_via_sitemap(base_url, platform)
         if urls:
             return urls
 
@@ -172,34 +179,126 @@ class URLDiscoveryService:
         if urls:
             return urls
 
-        logger.info(f"No URLs discovered for {base_url}, returning base URL for crawling")
+        logger.info("No URLs discovered for %s, returning base URL for crawling", base_url)
         return [base_url]
 
-    # ── Sitemap discovery ─────────────────────────────────────────────
+    # ── Sitemap discovery (3-phase) ───────────────────────────────────
 
-    async def _discover_via_sitemap(self, base_url: str) -> list[str]:
-        """Try common sitemap locations to find product URLs."""
-        sitemap_urls = [
-            f"{base_url}/sitemap.xml",
-            f"{base_url}/sitemap_index.xml",
-            f"{base_url}/product-sitemap.xml",
-            f"{base_url}/sitemap-products.xml",
-            f"{base_url}/pub/media/sitemap/sitemap.xml",
-            f"{base_url}/media/sitemap.xml",
-            f"{base_url}/xmlsitemap.xml",
-        ]
+    async def _discover_via_sitemap(
+        self, base_url: str, platform: Platform
+    ) -> list[str]:
+        """Discover product URLs from sitemaps.
 
-        all_entries = []
-        for sitemap_url in sitemap_urls:
-            entries = await self.sitemap_parser.parse(sitemap_url)
-            if entries:
-                logger.info(f"Found {len(entries)} product URLs in {sitemap_url}")
-                all_entries.extend(entries)
+        Phase 1: Try platform-specific product sitemaps (e.g. product-sitemap.xml).
+        Phase 2: Fall back to generic sitemap via AsyncUrlSeeder.
+        Phase 3: Apply denylist filter to all results.
+        """
+        base_url = base_url.rstrip("/")
+        domain = urlparse(base_url).netloc
 
-        unique_urls = list({entry.url for entry in all_entries})
-        if unique_urls:
-            logger.info(f"Total unique product URLs from sitemaps: {len(unique_urls)}")
-        return unique_urls
+        # Phase 1 -- platform-specific product sitemaps
+        product_sitemap_paths = PLATFORM_PRODUCT_SITEMAPS.get(platform.value, [])
+        if product_sitemap_paths:
+            product_urls = await self._try_product_sitemaps(base_url, product_sitemap_paths)
+            if product_urls:
+                filtered = [u for u in product_urls if not is_non_product_url(u)]
+                logger.info(
+                    "Product sitemaps yielded %d URLs (%d after filtering)",
+                    len(product_urls),
+                    len(filtered),
+                )
+                return filtered
+
+        # Phase 2 -- generic sitemap via AsyncUrlSeeder
+        config = SeedingConfig(
+            source="sitemap",
+            pattern="*",
+            filter_nonsense_urls=True,
+            max_urls=5000,
+            force=False,
+        )
+        urls: list[str] = []
+        try:
+            async with AsyncUrlSeeder() as seeder:
+                results = await seeder.urls(domain, config)
+            urls = [r["url"] for r in results if r.get("status") != "not_valid"]
+        except Exception as e:
+            logger.warning("AsyncUrlSeeder failed for %s: %s", domain, e)
+
+        # Phase 3 -- denylist filter
+        filtered = [u for u in urls if not is_non_product_url(u)]
+        if filtered:
+            logger.info(
+                "Sitemap discovery: %d URLs, %d after filtering",
+                len(urls),
+                len(filtered),
+            )
+        return filtered
+
+    async def _try_product_sitemaps(
+        self, base_url: str, paths: list[str]
+    ) -> list[str]:
+        """Probe platform-specific product sitemap URLs and extract <loc> entries.
+
+        Uses lightweight httpx + stdlib XML parsing (no browser needed).
+        """
+        urls: list[str] = []
+        async with httpx.AsyncClient(
+            timeout=self.timeout, follow_redirects=True
+        ) as client:
+            for path in paths:
+                sitemap_url = f"{base_url}{path}"
+                try:
+                    resp = await client.get(sitemap_url)
+                    if resp.status_code != 200:
+                        continue
+                    parsed_urls = self._parse_sitemap_xml(resp.text)
+                    if parsed_urls:
+                        logger.info(
+                            "Found %d URLs in %s", len(parsed_urls), sitemap_url
+                        )
+                        urls.extend(parsed_urls)
+                except Exception as e:
+                    logger.debug("Failed to fetch %s: %s", sitemap_url, e)
+        return urls
+
+    @staticmethod
+    def _parse_sitemap_xml(xml_text: str) -> list[str]:
+        """Extract all <loc> URLs from a sitemap XML string."""
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return []
+
+        urls: list[str] = []
+
+        # Handle sitemap index (recurse not needed -- we only probe known product sitemaps)
+        if root.tag.endswith("sitemapindex"):
+            return []
+
+        # Regular urlset
+        loc_elements = root.findall(".//sm:url/sm:loc", _SITEMAP_NS)
+        if not loc_elements:
+            loc_elements = root.findall(".//url/loc")
+        for loc in loc_elements:
+            if loc.text:
+                urls.append(loc.text.strip())
+        return urls
+
+    # ── WooCommerce URL filter ────────────────────────────────────────
+
+    @staticmethod
+    def _filter_woocommerce_urls(urls: list[str]) -> list[str]:
+        """If >= 30% of URLs contain /product/, keep only those.
+
+        WooCommerce product-sitemap.xml sometimes mixes product and non-product
+        URLs.  If a clear majority match the ``/product/`` pattern we can safely
+        drop the rest.  Otherwise keep everything (flat URL stores).
+        """
+        product_urls = [u for u in urls if "/product/" in u.lower()]
+        if len(product_urls) >= len(urls) * 0.3:
+            return product_urls
+        return urls
 
     # ── crawl4ai browser-based discovery ──────────────────────────────
 
@@ -209,12 +308,7 @@ class URLDiscoveryService:
         """Use crawl4ai BestFirstCrawlingStrategy to discover product URLs.
 
         Prioritizes product-like URLs via keyword scoring, filters out
-        non-product pages, and crawls up to max_pages. BestFirst uses a
-        priority queue so the most product-relevant URLs are visited first.
-
-        Args:
-            base_url: Shop base URL to start crawling from.
-            max_pages: Maximum pages to visit (default 100).
+        non-product pages, and crawls up to max_pages.
         """
         parsed = urlparse(base_url)
         domain = parsed.netloc
@@ -229,7 +323,7 @@ class URLDiscoveryService:
                     "*/help*", "*/support*", "*/careers*", "*/press*",
                     "*/wishlist*", "*/compare*",
                 ],
-                reverse=True,  # Exclude these patterns
+                reverse=True,
             ),
         ])
 
@@ -262,28 +356,21 @@ class URLDiscoveryService:
                 crawler_strategy=crawler_strategy,
             ) as crawler:
                 results = await crawler.arun(url=base_url, config=crawl_config)
-                # Deep crawl returns a list of CrawlResult
                 if isinstance(results, list):
                     for result in results:
-                        if result.success:
-                            url = result.url
-                            url_parsed = urlparse(url)
-                            path = url_parsed.path.rstrip("/")
-                            if path in NON_PRODUCT_PATHS:
-                                continue
-                            path_parts = set(path.strip("/").split("/"))
-                            if path_parts & NON_PRODUCT_SEGMENTS:
-                                continue
-                            found_urls.add(url)
+                        if result.success and not is_non_product_url(result.url):
+                            found_urls.add(result.url)
                 elif hasattr(results, "success") and results.success:
-                    found_urls.add(results.url)
+                    if not is_non_product_url(results.url):
+                        found_urls.add(results.url)
         except Exception as e:
             logger.error("Deep crawl discovery failed for %s: %s", base_url, e)
 
         if found_urls:
             logger.info(
                 "BestFirst crawl discovered %d candidate product URLs from %s",
-                len(found_urls), base_url,
+                len(found_urls),
+                base_url,
             )
 
         return list(found_urls)
