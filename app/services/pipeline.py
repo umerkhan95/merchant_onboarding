@@ -397,7 +397,8 @@ class Pipeline:
 
             raise
         finally:
-            await self._http_client.aclose()
+            if self._http_client is not None:
+                await self._http_client.aclose()
 
     async def _extract_products(
         self, shop_url: str, platform: Platform, urls: list[str], job_id: str

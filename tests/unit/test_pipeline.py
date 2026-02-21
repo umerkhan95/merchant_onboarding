@@ -1854,6 +1854,24 @@ class TestBrowserPriceReextract:
         # Product unchanged — no crash
         assert "price" not in products[0]
 
+
+@pytest.mark.asyncio
+async def test_pipeline_http_client_none_does_not_crash_finally(pipeline):
+    """If an exception occurs before _http_client is created, finally block must not crash.
+
+    Before the fix, the finally block called `await self._http_client.aclose()`
+    unconditionally — when _http_client was still None, this raised AttributeError
+    and swallowed the original exception.
+    """
+    assert pipeline._http_client is None  # Not yet created
+
+    with patch("app.services.pipeline.normalize_shop_url", side_effect=ValueError("bad url")):
+        # The original ValueError must propagate, NOT an AttributeError from aclose()
+        with pytest.raises(ValueError, match="bad url"):
+            await pipeline.run("job-err", "not-a-url")
+
+    # _http_client should still be None (never created)
+    assert pipeline._http_client is None
     async def test_handles_empty_result(self, pipeline):
         """Browser CSS extraction returning empty products does not crash."""
         products = [
