@@ -1,6 +1,6 @@
 # Merchant Onboarding Pipeline
 
-Automated product ingestion system for [OneUp.com](https://oneup.com). When a merchant signs up and provides their store URL, the system detects the e-commerce platform, discovers product URLs, extracts inventory data, and stores it in a unified format — handling millions of products across any platform.
+Automated product ingestion system. When a merchant signs up and provides their store URL, the system detects the e-commerce platform, discovers product URLs, extracts inventory data, and stores it in a unified format — handling millions of products across any platform.
 
 ## Architecture
 

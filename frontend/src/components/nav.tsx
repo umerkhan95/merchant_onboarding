@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/", label: "Onboard", icon: "+" },
   { href: "/jobs", label: "Jobs", icon: "#" },
+  { href: "/stores", label: "Stores", icon: "@" },
   { href: "/products", label: "Products", icon: "=" },
   { href: "/analytics", label: "Analytics", icon: "~" },
 ];
@@ -22,7 +23,7 @@ export function Nav() {
         <h1 className="text-lg font-bold text-[hsl(var(--foreground))]">
           Merchant Onboarding
         </h1>
-        <p className="text-xs text-[hsl(var(--muted-foreground))]">OneUp.com</p>
+        <p className="text-xs text-[hsl(var(--muted-foreground))]">Product Ingestion</p>
       </div>
 
       <nav className="flex flex-1 flex-col gap-1">

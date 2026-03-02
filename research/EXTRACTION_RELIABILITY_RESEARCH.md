@@ -849,7 +849,7 @@ alerts = [
 
 ---
 
-## Part 7: Implementation Roadmap for OneUp
+## Part 7: Implementation Roadmap
 
 ### Phase 1: Quick Wins (Week 1)
 

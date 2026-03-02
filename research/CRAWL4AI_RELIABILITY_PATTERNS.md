@@ -1,4 +1,4 @@
-# Crawl4AI Reliability Patterns for OneUp
+# Crawl4AI Reliability Patterns
 
 ## Quick Start: Zero-Result Prevention
 
@@ -858,7 +858,7 @@ class ExtractionMetrics:
 
 ---
 
-## Recommended Crawl4AI Settings for OneUp
+## Recommended Crawl4AI Settings
 
 ```python
 # app/config.py (or separate file)

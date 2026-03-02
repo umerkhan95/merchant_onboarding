@@ -34,6 +34,7 @@ class PlatformResult:
     platform: Platform
     confidence: float  # 0.0-1.0
     signals: list[str] = field(default_factory=list)  # detection signals found
+    html: str | None = None  # cached homepage HTML for merchant profile extraction
 
 
 class PlatformDetector:
@@ -55,6 +56,7 @@ class PlatformDetector:
             client: Optional httpx.AsyncClient. If None, creates a new client per detection.
         """
         self._client = client
+        self._cached_html: str | None = None
 
     async def detect(self, url: str) -> PlatformResult:
         """Detect platform for the given URL.
@@ -79,7 +81,7 @@ class PlatformDetector:
         client = self._client or httpx.AsyncClient(
             timeout=httpx.Timeout(PROBE_TIMEOUT),
             follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; OneUpBot/1.0; +https://oneup.com/bot)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MerchantBot/1.0)"},
         )
 
         try:
@@ -116,7 +118,7 @@ class PlatformDetector:
             f"(confidence: {confidence:.2f}, signals: {len(platform_signals)}, time: {elapsed:.2f}s)"
         )
 
-        return PlatformResult(platform=platform, confidence=confidence, signals=platform_signals)
+        return PlatformResult(platform=platform, confidence=confidence, signals=platform_signals, html=self._cached_html)
 
     async def _probe_headers(
         self, client: httpx.AsyncClient, url: str, signals: dict[Platform, list[str]]
@@ -283,6 +285,7 @@ class PlatformDetector:
                 )
                 return
 
+            self._cached_html = raw_html
             html = raw_html.lower()
 
             # Meta tag detection

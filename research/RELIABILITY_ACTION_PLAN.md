@@ -1,4 +1,4 @@
-# Guaranteed Extraction: Action Plan for OneUp
+# Guaranteed Extraction: Action Plan
 
 ## The Problem Statement
 
@@ -489,7 +489,7 @@ Options:
 Which option would you prefer?
 
 Best regards,
-OneUp Team
+The Team
     """
 
     await send_email(merchant_email, email)

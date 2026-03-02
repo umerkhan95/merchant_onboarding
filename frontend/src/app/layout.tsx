@@ -7,7 +7,7 @@ import { Nav } from "@/components/nav";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Merchant Onboarding - OneUp",
+  title: "Merchant Onboarding",
   description: "Onboard merchant stores and extract product data",
 };
 

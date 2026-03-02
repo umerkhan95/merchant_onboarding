@@ -1,8 +1,8 @@
-# Merchant Onboarding System - OneUp.com
+# Merchant Onboarding System
 
 ## Project Overview
 
-A merchant onboarding data ingestion pipeline for OneUp.com. When a merchant signs up and enters their shop URL, the system automatically detects the e-commerce platform, discovers product URLs, and ingests the store's product inventory into a unified format for OneUp's inventory management system.
+A merchant onboarding data ingestion pipeline. When a merchant signs up and enters their shop URL, the system automatically detects the e-commerce platform, discovers product URLs, and ingests the store's product inventory into a unified format for inventory management.
 
 ## Tech Stack
 

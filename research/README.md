@@ -1,6 +1,6 @@
 # Product Extraction Reliability Research & Implementation Guide
 
-This directory contains comprehensive research and implementation guides to ensure **guaranteed product extraction** for the OneUp merchant onboarding system.
+This directory contains comprehensive research and implementation guides to ensure **guaranteed product extraction** for the merchant onboarding system.
 
 ## Documents
 

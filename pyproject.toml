@@ -1,7 +1,7 @@
 [project]
 name = "merchant-onboarding"
 version = "0.1.0"
-description = "Merchant onboarding data ingestion pipeline for OneUp.com"
+description = "Merchant onboarding data ingestion pipeline"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
