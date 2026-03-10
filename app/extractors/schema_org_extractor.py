@@ -106,6 +106,10 @@ class SchemaOrgExtractor(BaseExtractor):
                                             nested = item.get(key)
                                             if isinstance(nested, dict) and SchemaOrgExtractor._is_product_type(nested.get("@type")):
                                                 products.append(nested)
+                                            elif isinstance(nested, list):
+                                                for sub in nested:
+                                                    if isinstance(sub, dict) and SchemaOrgExtractor._is_product_type(sub.get("@type")):
+                                                        products.append(sub)
 
                     # Handle array of objects
                     elif isinstance(data, list):

@@ -77,7 +77,7 @@ class ProductNormalizer:
         """
         if not value:
             return None
-        value = value.strip()
+        value = value.strip().replace("-", "").replace(" ", "")
         if not value:
             return None
         if not value.isdigit():

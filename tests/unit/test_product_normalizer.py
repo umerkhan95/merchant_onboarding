@@ -1202,6 +1202,10 @@ class TestGTINValidation:
         assert normalizer._validate_gtin("") is None
         assert normalizer._validate_gtin("   ") is None
 
+    def test_validate_gtin_strips_dashes_and_spaces(self, normalizer):
+        assert normalizer._validate_gtin("5901234-123457") == "5901234123457"
+        assert normalizer._validate_gtin("590 1234 123457") == "5901234123457"
+
     def test_schema_org_gtin_from_offers(self, normalizer):
         raw = {
             "name": "Product Without Root GTIN",

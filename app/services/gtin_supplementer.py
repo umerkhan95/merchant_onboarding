@@ -79,6 +79,11 @@ class GTINSupplementer:
                     identifiers_by_path[path] = result
 
         if not identifiers_by_path:
+            self._log.info(
+                "GTIN supplementer found no identifiers across %d URLs for %s",
+                len(urls_to_fetch),
+                shop_url,
+            )
             return products
 
         # Build title lookup as fallback

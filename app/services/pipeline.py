@@ -509,17 +509,9 @@ class Pipeline:
                     raw_products = await supplementer.supplement(
                         raw_products, shop_url
                     )
-            # Supplement GTIN/MPN when barcode coverage is low
-            if raw_products and self._should_supplement_gtin(raw_products, platform):
-                await self.progress.update(
-                    job_id=job_id,
-                    processed=0,
-                    total=len(raw_products),
-                    status=JobStatus.EXTRACTING,
-                    current_step="Supplementing GTIN/EAN data",
-                )
-                gtin_supplementer = GTINSupplementer(self._http_client)  # type: ignore[arg-type]
-                raw_products = await gtin_supplementer.supplement(raw_products, shop_url)
+            raw_products = await self._supplement_gtin_if_needed(
+                raw_products, platform, shop_url, job_id
+            )
 
         elif platform == Platform.WOOCOMMERCE:
             extractor = WooCommerceAPIExtractor()
@@ -540,17 +532,9 @@ class Pipeline:
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
                     urls, shop_url, job_id, tracker=tracker
                 )
-            # WooCommerce Store API never exposes barcodes — always supplement
-            if raw_products and self._should_supplement_gtin(raw_products, platform):
-                await self.progress.update(
-                    job_id=job_id,
-                    processed=0,
-                    total=len(raw_products),
-                    status=JobStatus.EXTRACTING,
-                    current_step="Supplementing GTIN/EAN data",
-                )
-                gtin_supplementer = GTINSupplementer(self._http_client)  # type: ignore[arg-type]
-                raw_products = await gtin_supplementer.supplement(raw_products, shop_url)
+            raw_products = await self._supplement_gtin_if_needed(
+                raw_products, platform, shop_url, job_id
+            )
 
         elif platform == Platform.MAGENTO:
             extractor = MagentoAPIExtractor()
@@ -571,17 +555,9 @@ class Pipeline:
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
                     urls, shop_url, job_id, tracker=tracker
                 )
-            # Supplement GTIN/MPN when Magento API barcode coverage is low
-            if raw_products and self._should_supplement_gtin(raw_products, platform):
-                await self.progress.update(
-                    job_id=job_id,
-                    processed=0,
-                    total=len(raw_products),
-                    status=JobStatus.EXTRACTING,
-                    current_step="Supplementing GTIN/EAN data",
-                )
-                gtin_supplementer = GTINSupplementer(self._http_client)  # type: ignore[arg-type]
-                raw_products = await gtin_supplementer.supplement(raw_products, shop_url)
+            raw_products = await self._supplement_gtin_if_needed(
+                raw_products, platform, shop_url, job_id
+            )
 
         elif platform == Platform.BIGCOMMERCE:
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
@@ -1271,6 +1247,37 @@ class Pipeline:
             for key, val in merged.items():
                 if not Pipeline._is_value_present(product.get(key)):
                     product[key] = val
+
+    async def _supplement_gtin_if_needed(
+        self,
+        raw_products: list[dict],
+        platform: Platform,
+        shop_url: str,
+        job_id: str,
+    ) -> list[dict]:
+        """Run GTIN supplementation if needed. Never crashes the pipeline."""
+        if not raw_products or not self._should_supplement_gtin(raw_products, platform):
+            return raw_products
+        try:
+            await self.progress.update(
+                job_id=job_id,
+                processed=0,
+                total=len(raw_products),
+                status=JobStatus.EXTRACTING,
+                current_step="Supplementing GTIN/EAN data",
+            )
+            if self._http_client is None:
+                logger.error("HTTP client not initialized, skipping GTIN supplementation")
+                return raw_products
+            supplementer = GTINSupplementer(self._http_client)
+            return await supplementer.supplement(raw_products, shop_url)
+        except Exception as e:
+            logger.error(
+                "GTIN supplementation failed for %s (continuing without GTINs): %s",
+                shop_url,
+                e,
+            )
+            return raw_products
 
     @staticmethod
     def _should_supplement_gtin(products: list[dict], platform: Platform) -> bool:
