@@ -98,6 +98,9 @@ class JobProgress(BaseModel):
     products_count: int | None = Field(None, description="Total products ingested")
     started_at: str | None = Field(None, description="ISO timestamp when job started")
     completed_at: str | None = Field(None, description="ISO timestamp when job completed")
+    recent_products: list[dict] | None = Field(None, description="Last N extracted products")
+    extraction_audit: dict | None = Field(None, description="Extraction outcome counts")
+    coverage_percentage: float | None = Field(None, description="URL coverage percentage")
 
     @field_validator("percentage", mode="before")
     @classmethod

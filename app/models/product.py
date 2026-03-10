@@ -49,11 +49,16 @@ class Product(BaseModel):
     image_url: str = Field(..., description="Primary product image URL")
     product_url: str = Field(..., description="Canonical product page URL")
     sku: str | None = Field(None, description="Stock keeping unit identifier")
+    gtin: str | None = Field(None, description="GTIN/EAN/UPC barcode identifier")
+    mpn: str | None = Field(None, description="Manufacturer part number")
     vendor: str | None = Field(None, description="Product vendor/brand")
     product_type: str | None = Field(None, description="Product category/type")
     in_stock: bool = Field(..., description="Availability status")
+    condition: str | None = Field(None, description="Product condition (NEW, REFURBISHED, USED)")
     variants: list[Variant] = Field(default_factory=list, description="Product variants")
     tags: list[str] = Field(default_factory=list, description="Product tags")
+    additional_images: list[str] = Field(default_factory=list, description="Additional product image URLs")
+    category_path: list[str] = Field(default_factory=list, description="Category breadcrumb hierarchy")
     raw_data: dict = Field(default_factory=dict, description="Original platform data for debugging")
     scraped_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), description="Timestamp of data extraction"

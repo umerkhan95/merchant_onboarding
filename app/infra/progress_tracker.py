@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -121,14 +122,22 @@ class ProgressTracker:
                     result[field_str] = int(value_str)
                 except (ValueError, TypeError):
                     result[field_str] = 0
-            elif field_str == "percentage":
-                result[field_str] = float(value_str)
+            elif field_str in ("percentage", "coverage_percentage"):
+                try:
+                    result[field_str] = float(value_str)
+                except (ValueError, TypeError):
+                    result[field_str] = 0.0
+            elif field_str in ("recent_products", "extraction_audit", "reconciliation_report"):
+                try:
+                    result[field_str] = json.loads(value_str)
+                except (json.JSONDecodeError, TypeError):
+                    result[field_str] = None
             else:
                 result[field_str] = value_str
 
         return result
 
-    async def set_metadata(self, job_id: str, **fields: str | int) -> None:
+    async def set_metadata(self, job_id: str, **fields: str | int | float) -> None:
         """Store persistent metadata fields on a job hash.
 
         Separate from update() so existing progress calls are untouched.

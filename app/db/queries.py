@@ -17,11 +17,16 @@ CREATE TABLE IF NOT EXISTS products (
     image_url TEXT DEFAULT '',
     product_url TEXT DEFAULT '',
     sku TEXT,
+    gtin TEXT,
+    mpn TEXT,
     vendor TEXT,
     product_type TEXT,
     in_stock BOOLEAN DEFAULT TRUE,
+    condition TEXT,
     variants JSONB DEFAULT '[]',
     tags JSONB DEFAULT '[]',
+    additional_images JSONB DEFAULT '[]',
+    category_path JSONB DEFAULT '[]',
     raw_data JSONB DEFAULT '{}',
     scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     idempotency_key TEXT NOT NULL,
@@ -44,13 +49,15 @@ CREATE TEMP TABLE IF NOT EXISTS staging_products (LIKE products INCLUDING DEFAUL
 UPSERT_FROM_STAGING = """
 INSERT INTO products (
     external_id, shop_id, platform, title, description, price, compare_at_price,
-    currency, image_url, product_url, sku, vendor, product_type, in_stock,
-    variants, tags, raw_data, scraped_at, idempotency_key
+    currency, image_url, product_url, sku, gtin, mpn, vendor, product_type, in_stock,
+    condition, variants, tags, additional_images, category_path,
+    raw_data, scraped_at, idempotency_key
 )
 SELECT
     external_id, shop_id, platform, title, description, price, compare_at_price,
-    currency, image_url, product_url, sku, vendor, product_type, in_stock,
-    variants, tags, raw_data, scraped_at, idempotency_key
+    currency, image_url, product_url, sku, gtin, mpn, vendor, product_type, in_stock,
+    condition, variants, tags, additional_images, category_path,
+    raw_data, scraped_at, idempotency_key
 FROM staging_products
 ON CONFLICT (idempotency_key)
 DO UPDATE SET
@@ -60,9 +67,18 @@ DO UPDATE SET
     compare_at_price = EXCLUDED.compare_at_price,
     image_url = EXCLUDED.image_url,
     product_url = EXCLUDED.product_url,
+    sku = EXCLUDED.sku,
+    gtin = EXCLUDED.gtin,
+    mpn = EXCLUDED.mpn,
+    vendor = EXCLUDED.vendor,
+    product_type = EXCLUDED.product_type,
+    currency = EXCLUDED.currency,
     in_stock = EXCLUDED.in_stock,
+    condition = EXCLUDED.condition,
     variants = EXCLUDED.variants,
     tags = EXCLUDED.tags,
+    additional_images = EXCLUDED.additional_images,
+    category_path = EXCLUDED.category_path,
     raw_data = EXCLUDED.raw_data,
     scraped_at = EXCLUDED.scraped_at,
     updated_at = NOW();
@@ -112,4 +128,94 @@ WHERE price = 0
   AND (image_url IS NULL OR image_url = '')
   AND (sku IS NULL OR sku = '')
   AND (external_id IS NULL OR external_id = '');
+"""
+
+# --- Merchant Profiles ---
+
+CREATE_MERCHANT_PROFILES_TABLE = """
+CREATE TABLE IF NOT EXISTS merchant_profiles (
+    id BIGSERIAL PRIMARY KEY,
+    shop_id TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL,
+    shop_url TEXT NOT NULL,
+
+    -- Business identity
+    company_name TEXT,
+    logo_url TEXT,
+    description TEXT,
+    about_text TEXT,
+    founding_year INTEGER,
+    industry TEXT,
+    language VARCHAR(10),
+    currency VARCHAR(3),
+
+    -- Contact (structured JSONB)
+    contact JSONB DEFAULT '{}',
+
+    -- Social links
+    social_links JSONB DEFAULT '{}',
+
+    -- Analytics/tracking tags
+    analytics_tags JSONB DEFAULT '[]',
+
+    -- Metadata
+    favicon_url TEXT,
+    pages_crawled JSONB DEFAULT '[]',
+    extraction_confidence NUMERIC(3,2) DEFAULT 0.0,
+
+    scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_merchant_profiles_shop_id
+    ON merchant_profiles(shop_id);
+"""
+
+UPSERT_MERCHANT_PROFILE = """
+INSERT INTO merchant_profiles (
+    shop_id, platform, shop_url, company_name, logo_url, description,
+    about_text, founding_year, industry, language, currency,
+    contact, social_links, analytics_tags,
+    favicon_url, pages_crawled, extraction_confidence, scraped_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+    $12, $13, $14, $15, $16, $17, $18
+)
+ON CONFLICT (shop_id) DO UPDATE SET
+    platform = EXCLUDED.platform,
+    shop_url = EXCLUDED.shop_url,
+    company_name = EXCLUDED.company_name,
+    logo_url = EXCLUDED.logo_url,
+    description = EXCLUDED.description,
+    about_text = EXCLUDED.about_text,
+    founding_year = EXCLUDED.founding_year,
+    industry = EXCLUDED.industry,
+    language = EXCLUDED.language,
+    currency = EXCLUDED.currency,
+    contact = EXCLUDED.contact,
+    social_links = EXCLUDED.social_links,
+    analytics_tags = EXCLUDED.analytics_tags,
+    favicon_url = EXCLUDED.favicon_url,
+    pages_crawled = EXCLUDED.pages_crawled,
+    extraction_confidence = EXCLUDED.extraction_confidence,
+    scraped_at = EXCLUDED.scraped_at,
+    updated_at = NOW();
+"""
+
+SELECT_MERCHANT_PROFILE = """
+SELECT * FROM merchant_profiles WHERE shop_id = $1;
+"""
+
+SELECT_ALL_MERCHANT_PROFILES = """
+SELECT * FROM merchant_profiles ORDER BY updated_at DESC;
+"""
+
+# Migration: add idealo-required columns to existing products table
+ALTER_PRODUCTS_ADD_IDEALO_FIELDS = """
+ALTER TABLE products ADD COLUMN IF NOT EXISTS gtin TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS mpn TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS condition TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS additional_images JSONB DEFAULT '[]';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS category_path JSONB DEFAULT '[]';
 """

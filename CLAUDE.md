@@ -186,6 +186,7 @@ GET    /api/v1/products/{id}        -> Single product detail
 GET    /api/v1/dlq                  -> Dead letter queue inspection
 POST   /api/v1/dlq/{job_id}/retry   -> Replay failed job
 GET    /api/v1/analytics            -> Extraction analytics
+GET    /api/v1/exports/idealo/csv   -> Idealo CSV feed export
 GET    /health                       -> Health check
 GET    /readiness                    -> Readiness check
 ```
@@ -243,6 +244,7 @@ merchant_onboarding/
 |   |       +-- products.py           # GET /products
 |   |       +-- dlq.py                # GET /dlq, POST /dlq/{id}/retry
 |   |       +-- analytics.py          # GET /analytics
+|   |       +-- exports.py           # GET /exports/idealo/csv
 |   +-- models/
 |   |   +-- product.py                # Product Pydantic model (unified schema)
 |   |   +-- job.py                    # OnboardingJob model (request/response/status)
@@ -260,6 +262,9 @@ merchant_onboarding/
 |   |   +-- extraction_validator.py   # Validates extraction results meet quality thresholds
 |   |   +-- page_validator.py         # Validates if a URL is actually a product page
 |   |   +-- reconciliation_reporter.py # Generates coverage/reconciliation reports
+|   +-- exporters/
+|   |   +-- idealo_csv.py             # Idealo CSV/TSV feed exporter
+|   |   +-- idealo_pws.py             # Idealo PWS 2.0 REST API client
 |   +-- extractors/
 |   |   +-- base.py                   # BaseExtractor ABC + ExtractionResult dataclass
 |   |   +-- browser_config.py         # Browser/crawl config helpers, stealth levels, fetch_html_with_browser()
@@ -370,6 +375,8 @@ merchant_onboarding/
 | `URLValidator` | SSRF-safe URL validation (scheme, private IPs, ports). |
 | `HTMLSanitizer` | Strips dangerous HTML via bleach. |
 | `Pipeline` | Orchestrator ONLY. Calls components in order. Contains no business logic itself. |
+| `IdealoCSVExporter` | Converts Product list to idealo-compatible TSV feed. No DB access. |
+| `IdealoPWSClient` | Pushes offers to idealo PWS 2.0 REST API. OAuth2 auth, rate-aware. |
 
 ## crawl4ai Usage
 

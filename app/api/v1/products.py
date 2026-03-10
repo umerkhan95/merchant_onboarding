@@ -38,7 +38,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
             d[k] = float(v)
         elif isinstance(v, datetime):
             d[k] = v.isoformat()
-        elif isinstance(v, str) and k in ("variants", "tags", "raw_data"):
+        elif isinstance(v, str) and k in ("variants", "tags", "raw_data", "additional_images", "category_path"):
             try:
                 d[k] = json.loads(v)
             except (json.JSONDecodeError, TypeError):

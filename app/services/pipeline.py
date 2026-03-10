@@ -7,6 +7,7 @@ Contains NO business logic itself - only calls components in order.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -36,9 +37,12 @@ from app.services.reconciliation_reporter import ReconciliationReporter
 from app.services.shopify_price_supplementer import ShopifyPriceSupplementer
 from app.services.url_discovery import URLDiscoveryService
 from app.services.url_normalizer import normalize_shop_url
+from app.extractors.merchant_profile_extractor import MerchantProfileExtractor
+from app.services.merchant_profile_normalizer import MerchantProfileNormalizer
 
 if TYPE_CHECKING:
     from app.db.bulk_ingestor import BulkIngestor
+    from app.db.merchant_profile_ingestor import MerchantProfileIngestor
     from app.extractors.llm_extractor import LLMExtractor
     from app.extractors.smart_css_extractor import SmartCSSExtractor
     from app.infra.circuit_breaker import CircuitBreaker
@@ -73,6 +77,7 @@ class Pipeline:
         smart_css_extractor: SmartCSSExtractor | None = None,
         llm_extractor: LLMExtractor | None = None,
         llm_budget: LLMBudgetTracker | None = None,
+        profile_ingestor: MerchantProfileIngestor | None = None,
     ):
         """Initialize pipeline with infrastructure components.
 
@@ -84,10 +89,12 @@ class Pipeline:
             smart_css_extractor: Optional auto-generating CSS extractor (Tier 4)
             llm_extractor: Optional universal LLM extractor (Tier 5)
             llm_budget: Optional LLM cost budget tracker (for Tier 4-5)
+            profile_ingestor: Optional merchant profile ingestor for database operations
         """
         self.detector = PlatformDetector()
         self.discovery = URLDiscoveryService()
         self.normalizer = ProductNormalizer()
+        self.profile_normalizer = MerchantProfileNormalizer()
         self.quality_scorer = QualityScorer()
         self.validator = ExtractionValidator()
         self.completeness_checker = CompletenessChecker()
@@ -97,10 +104,39 @@ class Pipeline:
         self.circuit_breaker = circuit_breaker
         self.rate_limiter = rate_limiter
         self.ingestor = bulk_ingestor
+        self.profile_ingestor = profile_ingestor
         self.smart_css = smart_css_extractor
         self.llm_extractor = llm_extractor
         self.llm_budget = llm_budget
         self._http_client: httpx.AsyncClient | None = None
+
+    async def _emit_extraction_metadata(
+        self, job_id: str, all_products: list[dict], tracker: ExtractionTracker
+    ) -> None:
+        """Emit recent_products and extraction_audit metadata to Redis."""
+        # Last 5 products with display-safe fields
+        recent = []
+        for p in all_products[-5:]:
+            recent.append({
+                "title": p.get("title") or p.get("name", ""),
+                "price": p.get("price") or p.get("og:price:amount", ""),
+                "image_url": p.get("image_url") or p.get("image") or p.get("og:image", ""),
+            })
+
+        audit = tracker.build_audit()
+        audit_data = {
+            "urls_success": audit.urls_with_products,
+            "urls_empty": audit.urls_empty,
+            "urls_error": audit.urls_errored,
+            "urls_not_product": audit.urls_not_product,
+            "total_products": audit.total_products,
+        }
+
+        await self.progress.set_metadata(
+            job_id,
+            recent_products=json.dumps(recent),
+            extraction_audit=json.dumps(audit_data),
+        )
 
     async def run(
         self, job_id: str, shop_url: str, timeout: int = _PIPELINE_TIMEOUT_SECONDS
@@ -175,6 +211,36 @@ class Pipeline:
                 f"Platform detected: {platform} (confidence: {platform_result.confidence:.2f})"
             )
             await self.progress.set_metadata(job_id, platform=platform.value)
+
+            # Step 1b: Extract merchant profile (non-blocking)
+            try:
+                profile_extractor = MerchantProfileExtractor(client=self._http_client)
+                profile_result = await profile_extractor.extract(
+                    shop_url=shop_url,
+                    homepage_html=platform_result.html,
+                )
+
+                if profile_result.raw_data and not profile_result.error:
+                    profile = self.profile_normalizer.normalize(
+                        raw=profile_result.raw_data,
+                        shop_id=shop_url,
+                        platform=platform,
+                        shop_url=shop_url,
+                    )
+                    if profile and self.profile_ingestor:
+                        await self.profile_ingestor.upsert(profile)
+                        logger.info(
+                            "Merchant profile saved (confidence: %.2f, tags: %d)",
+                            profile.extraction_confidence,
+                            len(profile.analytics_tags),
+                        )
+                    await self.progress.set_metadata(
+                        job_id,
+                        merchant_profile_confidence=profile_result.confidence if profile_result else 0.0,
+                    )
+            except Exception as e:
+                # Profile extraction failure never blocks the product pipeline
+                logger.exception("Merchant profile extraction failed (non-fatal): %s", e)
 
             # Step 2: Discover product URLs
             await self.progress.update(
@@ -427,6 +493,7 @@ class Pipeline:
             if raw_products:
                 ExtractionTracker.tag_products_with_source(raw_products, shop_url)
                 tracker.record_success(shop_url, len(raw_products))
+                await self._emit_extraction_metadata(job_id, raw_products, tracker)
             else:
                 tracker.record_empty(shop_url)
             # Fallback to full chain on discovered URLs if API returned nothing
@@ -452,6 +519,7 @@ class Pipeline:
             if raw_products:
                 ExtractionTracker.tag_products_with_source(raw_products, shop_url)
                 tracker.record_success(shop_url, len(raw_products))
+                await self._emit_extraction_metadata(job_id, raw_products, tracker)
             else:
                 tracker.record_empty(shop_url)
             # Fallback to full chain on discovered URLs if API returned nothing
@@ -471,6 +539,7 @@ class Pipeline:
             if raw_products:
                 ExtractionTracker.tag_products_with_source(raw_products, shop_url)
                 tracker.record_success(shop_url, len(raw_products))
+                await self._emit_extraction_metadata(job_id, raw_products, tracker)
             else:
                 tracker.record_empty(shop_url)
             # Fallback to full chain on discovered URLs if API returned nothing
@@ -506,7 +575,8 @@ class Pipeline:
         shop_url: str,
         job_id: str,
         css_schema: dict | None = None,
-        tracker: ExtractionTracker | None = None,
+        *,
+        tracker: ExtractionTracker,
     ) -> tuple[list[dict], ExtractionTier]:
         """Try extraction strategies in priority order with cross-tier field merging.
 
@@ -521,7 +591,7 @@ class Pipeline:
             shop_url: Base shop URL (for rate limiting domain)
             job_id: Job identifier for progress tracking
             css_schema: Optional CSS schema (uses GENERIC_SCHEMA if None)
-            tracker: Optional ExtractionTracker for per-URL outcome recording
+            tracker: ExtractionTracker for per-URL outcome recording
 
         Returns:
             Tuple of (raw_products, extraction_tier)
@@ -890,6 +960,7 @@ class Pipeline:
                 status=JobStatus.EXTRACTING,
                 current_step=f"Extracted {processed}/{total} URLs, got {len(all_products)} products",
             )
+            await self._emit_extraction_metadata(job_id, all_products, tracker)
 
         # Catastrophic error rate detection
         audit = tracker.build_audit()
@@ -962,6 +1033,7 @@ class Pipeline:
                 status=JobStatus.EXTRACTING,
                 current_step=f"Extracted {processed}/{total} URLs, got {len(all_products)} products",
             )
+            await self._emit_extraction_metadata(job_id, all_products, tracker)
 
         # Catastrophic error rate detection: abort if >80% of URLs failed
         audit = tracker.build_audit()

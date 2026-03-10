@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import v1_router
 from app.config import settings
-from app.db.queries import CREATE_PRODUCTS_TABLE
+from app.db.queries import ALTER_PRODUCTS_ADD_IDEALO_FIELDS, CREATE_PRODUCTS_TABLE, CREATE_MERCHANT_PROFILES_TABLE
 from app.db.supabase_client import DatabaseClient
 from app.exceptions.handlers import register_exception_handlers
 from app.infra.perf_middleware import PerfMiddleware
@@ -37,7 +37,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await db.connect()
             async with db.pool.acquire() as conn:
                 await conn.execute(CREATE_PRODUCTS_TABLE)
-            logger.info("PostgreSQL connected and products table ensured")
+                await conn.execute(ALTER_PRODUCTS_ADD_IDEALO_FIELDS)
+                await conn.execute(CREATE_MERCHANT_PROFILES_TABLE)
+            logger.info("PostgreSQL connected and tables ensured")
             break
         except Exception:
             if attempt < max_retries:

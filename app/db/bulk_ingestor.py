@@ -98,11 +98,16 @@ class BulkIngestor:
                         p.image_url,
                         p.product_url,
                         p.sku,
+                        p.gtin,
+                        p.mpn,
                         p.vendor,
                         p.product_type,
                         p.in_stock,
+                        p.condition,
                         json.dumps([v.model_dump(mode="json") for v in p.variants]),
                         json.dumps(p.tags),
+                        json.dumps(p.additional_images),
+                        json.dumps(p.category_path),
                         json.dumps(p.raw_data),
                         p.scraped_at,
                         p.idempotency_key,
@@ -117,8 +122,9 @@ class BulkIngestor:
                     columns=[
                         "external_id", "shop_id", "platform", "title", "description",
                         "price", "compare_at_price", "currency", "image_url",
-                        "product_url", "sku", "vendor", "product_type", "in_stock",
-                        "variants", "tags", "raw_data", "scraped_at", "idempotency_key",
+                        "product_url", "sku", "gtin", "mpn", "vendor", "product_type",
+                        "in_stock", "condition", "variants", "tags", "additional_images",
+                        "category_path", "raw_data", "scraped_at", "idempotency_key",
                     ],
                 )
 

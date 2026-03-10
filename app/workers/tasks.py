@@ -9,6 +9,7 @@ import redis.asyncio as redis
 
 from app.config import settings
 from app.db.bulk_ingestor import BulkIngestor
+from app.db.merchant_profile_ingestor import MerchantProfileIngestor
 from app.db.supabase_client import DatabaseClient
 from app.infra.circuit_breaker import CircuitBreaker
 from app.infra.progress_tracker import ProgressTracker
@@ -89,6 +90,9 @@ async def _run_pipeline(job_id: str, shop_url: str) -> dict:
         # Initialize bulk ingestor
         bulk_ingestor = BulkIngestor(db_client)
 
+        # Initialize merchant profile ingestor
+        profile_ingestor = MerchantProfileIngestor(db_client)
+
         # Initialize LLM-powered extractors (Tiers 4-5) if API key is configured
         smart_css_extractor = None
         llm_extractor = None
@@ -122,6 +126,7 @@ async def _run_pipeline(job_id: str, shop_url: str) -> dict:
             smart_css_extractor=smart_css_extractor,
             llm_extractor=llm_extractor,
             llm_budget=llm_budget,
+            profile_ingestor=profile_ingestor,
         )
 
         # Run pipeline

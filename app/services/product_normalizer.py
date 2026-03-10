@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 
 from app.models.enums import Platform
@@ -113,9 +114,16 @@ class ProductNormalizer:
                 logger.warning(f"Invalid compare_at_price for Shopify product {raw.get('id')}")
                 compare_at_price = None
 
-        # Extract image URL
+        # Extract image URLs (primary + additional)
         images = raw.get("images", [])
         image_url = images[0]["src"] if images else ""
+        additional_images = [img["src"] for img in images[1:] if img.get("src")]
+
+        # Extract GTIN/barcode from first variant
+        gtin = first_variant.get("barcode") or None
+        # Normalize empty strings to None
+        if gtin and not gtin.strip():
+            gtin = None
 
         # Build product URL
         handle = raw.get("handle", "")
@@ -176,11 +184,16 @@ class ProductNormalizer:
             "image_url": image_url,
             "product_url": product_url,
             "sku": first_variant.get("sku"),
+            "gtin": gtin,
+            "mpn": None,
             "vendor": raw.get("vendor"),
             "product_type": raw.get("product_type"),
             "in_stock": in_stock,
+            "condition": None,
             "variants": variants,
             "tags": tags,
+            "additional_images": additional_images,
+            "category_path": [raw["product_type"]] if raw.get("product_type") else [],
         }
 
     def _normalize_woocommerce(self, raw: dict, shop_url: str) -> dict | None:
@@ -212,9 +225,10 @@ class ProductNormalizer:
             except (InvalidOperation, ValueError):
                 pass
 
-        # Extract image URL
+        # Extract image URLs (primary + additional)
         images = raw.get("images", [])
         image_url = images[0].get("src", "") if images else ""
+        additional_images = [img["src"] for img in images[1:] if img.get("src")]
 
         # Product URL
         product_url = raw.get("permalink", "")
@@ -222,6 +236,13 @@ class ProductNormalizer:
         # Extract tags
         tags_raw = raw.get("tags", [])
         tags = [t.get("name", "") for t in tags_raw if isinstance(t, dict)]
+
+        # Extract category path
+        categories = raw.get("categories", [])
+        category_path = [
+            c.get("name", "") for c in categories
+            if isinstance(c, dict) and c.get("name")
+        ]
 
         return {
             "external_id": str(raw.get("id", "")),
@@ -232,12 +253,17 @@ class ProductNormalizer:
             "currency": prices.get("currency_code", "USD"),
             "image_url": image_url,
             "product_url": product_url,
-            "sku": None,  # Not in Store API response
+            "sku": raw.get("sku"),
+            "gtin": None,
+            "mpn": None,
             "vendor": None,
             "product_type": None,
-            "in_stock": True,  # Default assumption
+            "in_stock": True,
+            "condition": None,
             "variants": [],
             "tags": tags,
+            "additional_images": additional_images,
+            "category_path": category_path,
         }
 
     def _normalize_magento(self, raw: dict, shop_url: str) -> dict | None:
@@ -259,6 +285,9 @@ class ProductNormalizer:
         description = ""
         image_path = ""
         url_key = ""
+        gtin = None
+        mpn = None
+        manufacturer = None
 
         for attr in custom_attrs:
             if not isinstance(attr, dict):
@@ -272,11 +301,29 @@ class ProductNormalizer:
                 image_path = value
             elif code == "url_key":
                 url_key = value
+            elif code in ("ean", "gtin", "barcode"):
+                gtin = value if value else None
+            elif code == "mpn":
+                mpn = value if value else None
+            elif code == "manufacturer":
+                manufacturer = value if value else None
 
         # Build image URL
         image_url = ""
         if image_path:
             image_url = f"{shop_url.rstrip('/')}/media/catalog/product{image_path}"
+
+        # Build additional images from media gallery
+        gallery = raw.get("media_gallery_entries", [])
+        additional_images = []
+        for entry in gallery:
+            if not isinstance(entry, dict):
+                continue
+            file_path = entry.get("file", "")
+            if file_path and not entry.get("disabled") and file_path != image_path:
+                additional_images.append(
+                    f"{shop_url.rstrip('/')}/media/catalog/product{file_path}"
+                )
 
         # Build product URL
         product_url = shop_url
@@ -289,15 +336,20 @@ class ProductNormalizer:
             "description": HTMLSanitizer.sanitize(description),
             "price": price,
             "compare_at_price": None,
-            "currency": "USD",  # Default assumption
+            "currency": "USD",
             "image_url": image_url,
             "product_url": product_url,
             "sku": raw.get("sku"),
-            "vendor": None,
+            "gtin": gtin,
+            "mpn": mpn,
+            "vendor": manufacturer,
             "product_type": None,
-            "in_stock": True,  # Default assumption
+            "in_stock": True,
+            "condition": None,
             "variants": [],
             "tags": [],
+            "additional_images": additional_images,
+            "category_path": [],
         }
 
     def _normalize_generic(self, raw: dict, shop_url: str) -> dict | None:
@@ -321,6 +373,27 @@ class ProductNormalizer:
         # Try direct field mapping
         return self._normalize_css_generic(raw, shop_url)
 
+    @staticmethod
+    def _parse_condition(condition_str: str) -> str | None:
+        """Map Schema.org itemCondition to idealo condition values."""
+        if not condition_str:
+            return None
+        condition_str = str(condition_str)
+        if "NewCondition" in condition_str:
+            return "NEW"
+        if "RefurbishedCondition" in condition_str:
+            return "REFURBISHED"
+        if "UsedCondition" in condition_str or "DamagedCondition" in condition_str:
+            return "USED"
+        return None
+
+    @staticmethod
+    def _extract_image_url(img: str | dict) -> str:
+        """Extract URL string from Schema.org image (string or ImageObject)."""
+        if isinstance(img, dict):
+            return img.get("url") or img.get("contentUrl") or ""
+        return str(img) if img else ""
+
     def _normalize_schema_org(self, raw: dict, shop_url: str) -> dict | None:
         """Normalize Schema.org JSON-LD format."""
         title = raw.get("name", "").strip()
@@ -342,13 +415,17 @@ class ProductNormalizer:
 
         # Extract image (can be string, list, or dict ImageObject)
         image = raw.get("image", "")
+        additional_images: list[str] = []
         if isinstance(image, dict):
-            image_url = image.get("url") or image.get("contentUrl") or ""
+            image_url = self._extract_image_url(image)
         elif isinstance(image, list):
-            first = image[0] if image else ""
-            image_url = (first.get("url") or first.get("contentUrl") or "") if isinstance(first, dict) else first
+            image_url = self._extract_image_url(image[0]) if image else ""
+            additional_images = [
+                url for img in image[1:]
+                if (url := self._extract_image_url(img))
+            ]
         else:
-            image_url = image
+            image_url = str(image) if image else ""
 
         # Fallback chain for missing image: thumbnailUrl → og:image
         if not image_url:
@@ -360,6 +437,23 @@ class ProductNormalizer:
         availability = offers.get("availability", "")
         in_stock = "InStock" in str(availability) if availability else True
 
+        # Extract GTIN (try all Schema.org GTIN properties)
+        gtin = (
+            raw.get("gtin13") or raw.get("gtin") or raw.get("gtin14")
+            or raw.get("gtin12") or raw.get("gtin8") or raw.get("isbn")
+        ) or None
+
+        # Extract condition from offers
+        condition = self._parse_condition(offers.get("itemCondition", ""))
+
+        # Extract category path
+        category = raw.get("category")
+        category_path: list[str] = []
+        if isinstance(category, str) and category.strip():
+            category_path = [c.strip() for c in re.split(r"[>/]", category) if c.strip()]
+        elif isinstance(category, list):
+            category_path = [str(c) for c in category if c]
+
         return {
             "external_id": raw.get("sku", raw.get("productID", "")),
             "title": title,
@@ -370,11 +464,16 @@ class ProductNormalizer:
             "image_url": image_url,
             "product_url": raw.get("url", shop_url),
             "sku": raw.get("sku"),
+            "gtin": gtin,
+            "mpn": raw.get("mpn") or None,
             "vendor": raw.get("brand", {}).get("name") if isinstance(raw.get("brand"), dict) else raw.get("brand"),
             "product_type": None,
             "in_stock": in_stock,
+            "condition": condition,
             "variants": [],
             "tags": [],
+            "additional_images": additional_images,
+            "category_path": category_path,
         }
 
     def _normalize_opengraph(self, raw: dict, shop_url: str) -> dict | None:
@@ -402,11 +501,16 @@ class ProductNormalizer:
             "image_url": raw.get("og:image", ""),
             "product_url": raw.get("og:url", shop_url),
             "sku": None,
+            "gtin": None,
+            "mpn": None,
             "vendor": None,
             "product_type": None,
             "in_stock": True,
+            "condition": raw.get("product:condition") or None,
             "variants": [],
             "tags": [],
+            "additional_images": [],
+            "category_path": [raw["product:category"]] if raw.get("product:category") else [],
         }
 
     def _normalize_css_generic(self, raw: dict, shop_url: str) -> dict | None:
@@ -460,9 +564,14 @@ class ProductNormalizer:
             "image_url": raw.get("image") or raw.get("image_url") or raw.get("src") or "",
             "product_url": raw.get("product_url") or raw.get("url") or raw.get("canonical") or shop_url,
             "sku": raw.get("sku"),
+            "gtin": raw.get("gtin") or raw.get("ean") or raw.get("barcode") or None,
+            "mpn": raw.get("mpn") or None,
             "vendor": None,
             "product_type": None,
             "in_stock": True,
+            "condition": None,
             "variants": [],
             "tags": [],
+            "additional_images": [],
+            "category_path": [],
         }
