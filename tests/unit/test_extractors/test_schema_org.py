@@ -394,6 +394,87 @@ class TestSchemaOrgExtractor:
         assert len(result.products) == 1
         assert result.products[0]["name"] == "Graph Array Product"
 
+    def test_extract_product_from_graph_main_entity(self, extractor):
+        """ItemPage wrapping a Product via mainEntity should yield the Product."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@graph": [{
+                    "@type": "ItemPage",
+                    "mainEntity": {
+                        "@type": "Product",
+                        "name": "Widget",
+                        "gtin13": "4006381333931"
+                    }
+                }]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/widget")
+        assert len(products) == 1
+        assert products[0]["@type"] == "Product"
+        assert products[0]["name"] == "Widget"
+        assert products[0]["gtin13"] == "4006381333931"
+
+    def test_extract_product_from_graph_main_entity_of_page(self, extractor):
+        """WebPage with mainEntityOfPage Product should yield the Product."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@graph": [{
+                    "@type": "WebPage",
+                    "mainEntityOfPage": {
+                        "@type": "Product",
+                        "name": "Gadget",
+                        "sku": "GAD-001"
+                    }
+                }]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/gadget")
+        assert len(products) == 1
+        assert products[0]["@type"] == "Product"
+        assert products[0]["name"] == "Gadget"
+        assert products[0]["sku"] == "GAD-001"
+
+    def test_graph_without_main_entity_still_works(self, extractor):
+        """Regular @graph with direct Product items should still be extracted."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@graph": [
+                    {"@type": "Organization", "name": "Acme Corp"},
+                    {"@type": "Product", "name": "Direct Product", "sku": "DP-001"}
+                ]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/direct")
+        assert len(products) == 1
+        assert products[0]["name"] == "Direct Product"
+
     @pytest.mark.respx(base_url="https://example.com")
     async def test_headers_sent(self, extractor, respx_mock):
         """Test that User-Agent and Accept-Language headers are sent."""

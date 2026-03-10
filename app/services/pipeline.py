@@ -34,6 +34,7 @@ from app.services.page_validator import ProductPageValidator
 from app.services.platform_detector import PlatformDetector
 from app.services.product_normalizer import ProductNormalizer
 from app.services.reconciliation_reporter import ReconciliationReporter
+from app.services.gtin_supplementer import GTINSupplementer
 from app.services.shopify_price_supplementer import ShopifyPriceSupplementer
 from app.services.url_discovery import URLDiscoveryService
 from app.services.url_normalizer import normalize_shop_url
@@ -508,6 +509,17 @@ class Pipeline:
                     raw_products = await supplementer.supplement(
                         raw_products, shop_url
                     )
+            # Supplement GTIN/MPN when barcode coverage is low
+            if raw_products and self._should_supplement_gtin(raw_products, platform):
+                await self.progress.update(
+                    job_id=job_id,
+                    processed=0,
+                    total=len(raw_products),
+                    status=JobStatus.EXTRACTING,
+                    current_step="Supplementing GTIN/EAN data",
+                )
+                gtin_supplementer = GTINSupplementer(self._http_client)  # type: ignore[arg-type]
+                raw_products = await gtin_supplementer.supplement(raw_products, shop_url)
 
         elif platform == Platform.WOOCOMMERCE:
             extractor = WooCommerceAPIExtractor()
@@ -528,6 +540,17 @@ class Pipeline:
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
                     urls, shop_url, job_id, tracker=tracker
                 )
+            # WooCommerce Store API never exposes barcodes — always supplement
+            if raw_products and self._should_supplement_gtin(raw_products, platform):
+                await self.progress.update(
+                    job_id=job_id,
+                    processed=0,
+                    total=len(raw_products),
+                    status=JobStatus.EXTRACTING,
+                    current_step="Supplementing GTIN/EAN data",
+                )
+                gtin_supplementer = GTINSupplementer(self._http_client)  # type: ignore[arg-type]
+                raw_products = await gtin_supplementer.supplement(raw_products, shop_url)
 
         elif platform == Platform.MAGENTO:
             extractor = MagentoAPIExtractor()
@@ -548,6 +571,17 @@ class Pipeline:
                 raw_products, extraction_tier = await self._extract_with_fallback_chain(
                     urls, shop_url, job_id, tracker=tracker
                 )
+            # Supplement GTIN/MPN when Magento API barcode coverage is low
+            if raw_products and self._should_supplement_gtin(raw_products, platform):
+                await self.progress.update(
+                    job_id=job_id,
+                    processed=0,
+                    total=len(raw_products),
+                    status=JobStatus.EXTRACTING,
+                    current_step="Supplementing GTIN/EAN data",
+                )
+                gtin_supplementer = GTINSupplementer(self._http_client)  # type: ignore[arg-type]
+                raw_products = await gtin_supplementer.supplement(raw_products, shop_url)
 
         elif platform == Platform.BIGCOMMERCE:
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
@@ -1238,3 +1272,17 @@ class Pipeline:
                 if not Pipeline._is_value_present(product.get(key)):
                     product[key] = val
 
+    @staticmethod
+    def _should_supplement_gtin(products: list[dict], platform: Platform) -> bool:
+        """Return True if GTIN supplementation should run.
+
+        WooCommerce Store API never returns barcodes, so always supplement.
+        For Shopify and Magento, only supplement when fewer than 10% of products
+        already carry a GTIN (avoids redundant fetches when the API does provide them).
+        """
+        if platform == Platform.WOOCOMMERCE:
+            return True
+        if not products:
+            return False
+        gtin_count = sum(1 for p in products if p.get("gtin"))
+        return gtin_count / len(products) < 0.1

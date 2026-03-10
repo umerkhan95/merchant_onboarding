@@ -85,8 +85,27 @@ class SchemaOrgExtractor(BaseExtractor):
                         # Handle @graph array (common pattern)
                         elif "@graph" in data and isinstance(data["@graph"], list):
                             for item in data["@graph"]:
-                                if isinstance(item, dict) and SchemaOrgExtractor._is_product_type(item.get("@type")):
+                                if not isinstance(item, dict):
+                                    continue
+                                if SchemaOrgExtractor._is_product_type(item.get("@type")):
                                     products.append(item)
+                                else:
+                                    # Check mainEntity / mainEntityOfPage for nested Product
+                                    # (common with Yoast SEO: ItemPage wrapping a Product)
+                                    item_type = item.get("@type", "")
+                                    page_types = ("WebPage", "ItemPage", "CollectionPage")
+                                    is_page_type = (
+                                        isinstance(item_type, str) and any(pt in item_type for pt in page_types)
+                                    ) or (
+                                        isinstance(item_type, list) and any(
+                                            any(pt in str(t) for pt in page_types) for t in item_type
+                                        )
+                                    )
+                                    if is_page_type:
+                                        for key in ("mainEntity", "mainEntityOfPage"):
+                                            nested = item.get(key)
+                                            if isinstance(nested, dict) and SchemaOrgExtractor._is_product_type(nested.get("@type")):
+                                                products.append(nested)
 
                     # Handle array of objects
                     elif isinstance(data, list):

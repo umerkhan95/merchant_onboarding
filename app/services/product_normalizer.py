@@ -67,6 +67,42 @@ class ProductNormalizer:
             return None
         return product
 
+    @staticmethod
+    def _validate_gtin(value: str | None) -> str | None:
+        """Validate and normalize a GTIN/EAN/UPC value.
+
+        Accepts 8, 12, 13, or 14-digit numeric strings. Zero-pads 12-digit
+        UPC-A to 13-digit EAN-13. Rejects non-numeric, all-zeros, and
+        wrong-length values.
+        """
+        if not value:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if not value.isdigit():
+            return None
+        if set(value) == {"0"}:
+            return None
+        if len(value) == 12:
+            value = "0" + value
+        if len(value) not in (8, 13, 14):
+            return None
+        return value
+
+    @staticmethod
+    def _parse_additional_properties(props: list) -> dict:
+        """Extract GTIN/MPN identifiers from Schema.org additionalProperty array."""
+        known_ids = {"gtin", "gtin13", "gtin12", "gtin14", "gtin8", "ean", "mpn", "isbn"}
+        result = {}
+        for prop in props:
+            if not isinstance(prop, dict):
+                continue
+            prop_id = str(prop.get("propertyID", "") or prop.get("name", "")).lower()
+            if prop_id in known_ids:
+                result[prop_id] = prop.get("value", "")
+        return result
+
     def _is_valid_product(self, product: Product) -> bool:
         """Reject products that have no price, no image, AND no identifier.
 
@@ -119,11 +155,8 @@ class ProductNormalizer:
         image_url = images[0]["src"] if images else ""
         additional_images = [img["src"] for img in images[1:] if img.get("src")]
 
-        # Extract GTIN/barcode from first variant
-        gtin = first_variant.get("barcode") or None
-        # Normalize empty strings to None
-        if gtin and not gtin.strip():
-            gtin = None
+        # Extract and validate GTIN/barcode from first variant
+        gtin = self._validate_gtin(first_variant.get("barcode"))
 
         # Build product URL
         handle = raw.get("handle", "")
@@ -437,11 +470,27 @@ class ProductNormalizer:
         availability = offers.get("availability", "")
         in_stock = "InStock" in str(availability) if availability else True
 
-        # Extract GTIN (try all Schema.org GTIN properties)
-        gtin = (
+        # Parse additionalProperty as fallback for GTIN/MPN identifiers
+        additional = self._parse_additional_properties(raw.get("additionalProperty", []))
+
+        # Extract GTIN: product root -> offers -> additionalProperty
+        gtin_raw = (
             raw.get("gtin13") or raw.get("gtin") or raw.get("gtin14")
             or raw.get("gtin12") or raw.get("gtin8") or raw.get("isbn")
-        ) or None
+            or offers.get("gtin13") or offers.get("gtin") or offers.get("gtin14")
+            or offers.get("gtin12") or offers.get("gtin8")
+            or additional.get("gtin13") or additional.get("gtin12")
+            or additional.get("gtin14") or additional.get("gtin8")
+            or additional.get("gtin") or additional.get("ean")
+            or additional.get("isbn")
+        )
+        gtin = self._validate_gtin(gtin_raw)
+
+        # Extract MPN from product root, fallback to offers
+        mpn = raw.get("mpn") or offers.get("mpn") or None
+
+        sku = raw.get("sku") or additional.get("mpn")
+        external_id = raw.get("sku") or raw.get("productID") or gtin or ""
 
         # Extract condition from offers
         condition = self._parse_condition(offers.get("itemCondition", ""))
@@ -455,7 +504,7 @@ class ProductNormalizer:
             category_path = [str(c) for c in category if c]
 
         return {
-            "external_id": raw.get("sku", raw.get("productID", "")),
+            "external_id": external_id,
             "title": title,
             "description": HTMLSanitizer.sanitize(raw.get("description", "")),
             "price": price,
@@ -463,9 +512,9 @@ class ProductNormalizer:
             "currency": offers.get("priceCurrency", "USD"),
             "image_url": image_url,
             "product_url": raw.get("url", shop_url),
-            "sku": raw.get("sku"),
+            "sku": sku,
             "gtin": gtin,
-            "mpn": raw.get("mpn") or None,
+            "mpn": mpn,
             "vendor": raw.get("brand", {}).get("name") if isinstance(raw.get("brand"), dict) else raw.get("brand"),
             "product_type": None,
             "in_stock": in_stock,
@@ -564,7 +613,7 @@ class ProductNormalizer:
             "image_url": raw.get("image") or raw.get("image_url") or raw.get("src") or "",
             "product_url": raw.get("product_url") or raw.get("url") or raw.get("canonical") or shop_url,
             "sku": raw.get("sku"),
-            "gtin": raw.get("gtin") or raw.get("ean") or raw.get("barcode") or None,
+            "gtin": self._validate_gtin(raw.get("gtin") or raw.get("ean") or raw.get("barcode")),
             "mpn": raw.get("mpn") or None,
             "vendor": None,
             "product_type": None,

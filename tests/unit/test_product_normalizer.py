@@ -1162,3 +1162,166 @@ class TestProductValidityGate:
 
         assert product is not None
         assert product.price == Decimal("29.99")
+
+
+class TestGTINValidation:
+    """Test _validate_gtin static method."""
+
+    def test_validate_gtin_valid_ean13(self, normalizer):
+        assert normalizer._validate_gtin("4006381333931") == "4006381333931"
+
+    def test_validate_gtin_valid_upc_a_zero_padded(self, normalizer):
+        assert normalizer._validate_gtin("012345678905") == "0012345678905"
+
+    def test_validate_gtin_valid_gtin8(self, normalizer):
+        assert normalizer._validate_gtin("96385074") == "96385074"
+
+    def test_validate_gtin_valid_gtin14(self, normalizer):
+        assert normalizer._validate_gtin("10012345678902") == "10012345678902"
+
+    def test_validate_gtin_rejects_all_zeros(self, normalizer):
+        assert normalizer._validate_gtin("0000000000000") is None
+        assert normalizer._validate_gtin("000000000000") is None
+        assert normalizer._validate_gtin("00000000") is None
+
+    def test_validate_gtin_rejects_non_numeric(self, normalizer):
+        assert normalizer._validate_gtin("ABC123456789") is None
+        assert normalizer._validate_gtin("123-456-789") is None
+        assert normalizer._validate_gtin("123 456 789") is None
+
+    def test_validate_gtin_rejects_wrong_length(self, normalizer):
+        assert normalizer._validate_gtin("1234567890") is None  # 10 digits
+
+    def test_validate_gtin_strips_whitespace(self, normalizer):
+        assert normalizer._validate_gtin("  4006381333931  ") == "4006381333931"
+
+    def test_validate_gtin_none_returns_none(self, normalizer):
+        assert normalizer._validate_gtin(None) is None
+
+    def test_validate_gtin_empty_returns_none(self, normalizer):
+        assert normalizer._validate_gtin("") is None
+        assert normalizer._validate_gtin("   ") is None
+
+    def test_schema_org_gtin_from_offers(self, normalizer):
+        raw = {
+            "name": "Product Without Root GTIN",
+            "offers": {
+                "price": "19.99",
+                "priceCurrency": "USD",
+                "gtin13": "4006381333931",
+            },
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.gtin == "4006381333931"
+
+    def test_schema_org_mpn_from_offers(self, normalizer):
+        raw = {
+            "name": "Product Without Root MPN",
+            "offers": {
+                "price": "29.99",
+                "priceCurrency": "USD",
+                "mpn": "MPN-98765",
+            },
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.mpn == "MPN-98765"
+
+    def test_schema_org_product_gtin_takes_precedence(self, normalizer):
+        raw = {
+            "name": "Product With Both GTINs",
+            "gtin13": "4006381333931",
+            "offers": {
+                "price": "39.99",
+                "priceCurrency": "USD",
+                "gtin13": "9999999999999",
+            },
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.gtin == "4006381333931"
+
+
+class TestAdditionalPropertyParsing:
+    """Test additionalProperty fallback for GTIN/MPN in Schema.org normalization."""
+
+    def test_schema_org_gtin_from_additional_property(self, normalizer):
+        raw = {
+            "name": "Widget",
+            "offers": {"price": "9.99", "priceCurrency": "USD"},
+            "additionalProperty": [
+                {"@type": "PropertyValue", "propertyID": "gtin13", "value": "4006381333931"},
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.external_id == "4006381333931"
+
+    def test_schema_org_mpn_from_additional_property(self, normalizer):
+        raw = {
+            "name": "Gadget",
+            "offers": {"price": "19.99", "priceCurrency": "USD"},
+            "additionalProperty": [
+                {"@type": "PropertyValue", "propertyID": "mpn", "value": "ABC-123"},
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.sku == "ABC-123"
+
+    def test_schema_org_direct_gtin_takes_precedence_over_additional_property(self, normalizer):
+        raw = {
+            "name": "Widget",
+            "sku": "DIRECT-SKU",
+            "offers": {"price": "9.99", "priceCurrency": "USD"},
+            "additionalProperty": [
+                {"@type": "PropertyValue", "propertyID": "gtin13", "value": "9999999999999"},
+            ],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.GENERIC,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.external_id == "DIRECT-SKU"
+        assert product.sku == "DIRECT-SKU"
