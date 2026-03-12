@@ -30,14 +30,25 @@ logger = logging.getLogger(__name__)
 # Covers: Schema.org Product markup, common CSS classes, data attributes, and
 # Next.js/React hydration markers. No broad h1 fallback (fires on every page).
 PRODUCT_WAIT_CONDITION = (
-    'js:() => !!(document.querySelector("[itemtype*=Product]") || '
-    'document.querySelector("[itemtype*=product]") || '
-    'document.querySelector(".product") || '
-    'document.querySelector("[data-product]") || '
-    'document.querySelector("[data-product-id]") || '
-    'document.querySelectorAll("[class*=product]").length > 0 || '
-    'document.querySelector("[data-testid*=product]") || '
-    'document.querySelector("script[type=\\"application/ld+json\\"]"))'
+    'js:() => {'
+    '  const hasProduct = !!(document.querySelector("[itemtype*=Product]") || '
+    '    document.querySelector("[itemtype*=product]") || '
+    '    document.querySelector(".product") || '
+    '    document.querySelector("[data-product]") || '
+    '    document.querySelector("[data-product-id]") || '
+    '    document.querySelectorAll("[class*=product]").length > 0 || '
+    '    document.querySelector("[data-testid*=product]") || '
+    '    document.querySelector("script[type=\\"application/ld+json\\"]"));'
+    '  if (!hasProduct) return false;'
+    '  const priceEl = document.querySelector("[data-price], .price, .product-price, '
+    '    [class*=price], [itemprop=price], [data-product-price]");'
+    '  if (priceEl) return !!(priceEl.textContent && priceEl.textContent.trim().match(/\\d/));'
+    '  const jsonLd = document.querySelector("script[type=\\"application/ld+json\\"]");'
+    '  if (jsonLd) { try { const d = JSON.parse(jsonLd.textContent);'
+    '    const hasPrice = JSON.stringify(d).match(/"price"\\s*:\\s*"?[\\d.]+/);'
+    '    if (hasPrice) return true; } catch(e) {} }'
+    '  return false;'
+    '}'
 )
 
 DEFAULT_PAGE_TIMEOUT = 30000
@@ -215,12 +226,14 @@ def get_crawl_config(
         cache_mode=CacheMode.BYPASS,
         wait_until=wait_until,
         wait_for=wait_for,
+        wait_for_images=True,
         page_timeout=page_timeout,
         delay_before_return_html=delay_before_return_html,
         simulate_user=use_anti_bot,
         magic=use_anti_bot,
         override_navigator=use_anti_bot,
         scan_full_page=scan_full_page,
+        max_scroll_steps=20,
         remove_overlay_elements=remove_overlay_elements,
         scroll_delay=scroll_delay,
         check_robots_txt=check_robots_txt,

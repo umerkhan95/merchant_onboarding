@@ -45,6 +45,11 @@ NON_PRODUCT_SEGMENTS: set[str] = {
     "my-account", "order-tracking", "wp-admin", "wp-includes",
     "feed", "author", "tag", "category", "wp-login.php",
     "newsletter", "unsubscribe",
+    # WooCommerce / WordPress custom post types and taxonomies
+    "journal", "news", "stories", "articles", "recipe", "recipes",
+    "tea_collections", "product_collection",
+    "our-story", "sustainability", "charity", "events",
+    "product-category", "product-tag",
 }
 
 # ── File extensions that are never product pages ───────────────────────

@@ -10,6 +10,7 @@ denylist in ``url_filters``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from urllib.parse import urlparse
 
@@ -66,8 +67,15 @@ class URLDiscoveryService:
         self.stealth_level = stealth_level
         self._client = client
 
+    # Maximum time for URL discovery before aborting (5 minutes).
+    # Generic sites using BestFirst browser crawl can hang indefinitely.
+    _DISCOVERY_TIMEOUT = 300
+
     async def discover(self, base_url: str, platform: Platform) -> list[str]:
         """Discover product URLs based on platform.
+
+        Applies a 5-minute timeout to prevent indefinite hangs on generic sites
+        where browser-based BestFirst crawl explores deep navigation trees.
 
         Returns:
             List of product URLs or API endpoints to scrape.
@@ -76,19 +84,30 @@ class URLDiscoveryService:
         logger.info("Discovering URLs for %s (platform: %s)", base_url, platform)
 
         try:
-            if platform == Platform.SHOPIFY:
-                return await self._discover_shopify(base_url, platform)
-            elif platform == Platform.WOOCOMMERCE:
-                return await self._discover_woocommerce(base_url, platform)
-            elif platform == Platform.MAGENTO:
-                return await self._discover_magento(base_url, platform)
-            elif platform == Platform.BIGCOMMERCE:
-                return await self._discover_bigcommerce(base_url, platform)
-            else:
-                return await self._discover_generic(base_url, platform)
+            coro = self._discover_for_platform(base_url, platform)
+            return await asyncio.wait_for(coro, timeout=self._DISCOVERY_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(
+                "URL discovery timed out after %ds for %s (%s)",
+                self._DISCOVERY_TIMEOUT, base_url, platform.value,
+            )
+            return []
         except Exception as e:
             logger.error("Error discovering URLs for %s: %s", base_url, e)
             return []
+
+    async def _discover_for_platform(self, base_url: str, platform: Platform) -> list[str]:
+        """Dispatch to platform-specific discovery strategy."""
+        if platform == Platform.SHOPIFY:
+            return await self._discover_shopify(base_url, platform)
+        elif platform == Platform.WOOCOMMERCE:
+            return await self._discover_woocommerce(base_url, platform)
+        elif platform == Platform.MAGENTO:
+            return await self._discover_magento(base_url, platform)
+        elif platform == Platform.BIGCOMMERCE:
+            return await self._discover_bigcommerce(base_url, platform)
+        else:
+            return await self._discover_generic(base_url, platform)
 
     # ── Platform-specific strategies ──────────────────────────────────
 
