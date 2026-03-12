@@ -34,6 +34,7 @@ class ExtractionTier(StrEnum):
     """Product extraction tier/strategy."""
 
     API = "api"
+    UNIFIED_CRAWL = "unified_crawl"
     SCHEMA_ORG = "schema_org"
     OPENGRAPH = "opengraph"
     SITEMAP_CSS = "sitemap_css"
