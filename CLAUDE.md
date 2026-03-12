@@ -8,7 +8,7 @@ A merchant onboarding data ingestion pipeline. When a merchant signs up and ente
 
 - **API**: FastAPI (Python 3.11+, async throughout)
 - **Database**: Supabase (PostgreSQL via asyncpg for bulk ops)
-- **Scraping Engine**: crawl4ai (LLM-free extraction strategies for Tiers 1-3)
+- **Scraping Engine**: crawl4ai (LLM-free extraction via UnifiedCrawl for Tiers 1-2)
 - **Task Queue**: Celery + Redis (job persistence, retry, horizontal scaling)
 - **Progress**: Redis-backed SSE streaming
 - **Package Management**: uv
@@ -37,8 +37,8 @@ POST /api/v1/onboard {url}
    URLDiscoveryService       <- API pagination / platform sitemaps / AsyncUrlSeeder / BestFirst crawl
         |
         v
-   Extraction (tiered)       <- Tier 1: API | Tier 2: Schema.org | Tier 3: OG | fallback: CSS
-        |                       (Tiers 4-5 available if LLM_API_KEY configured)
+   Extraction (tiered)       <- Tier 1: API | Tier 2: UnifiedCrawl | fallback: CSS
+        |                       (Tiers 3-4 available if LLM_API_KEY configured)
         v
    ExtractionValidator       <- quality gate + completeness check
         |
@@ -69,20 +69,30 @@ nothing, falls back to the probe chain below.
 | WooCommerce | `/wp-json/wc/store/v1/products` | None (Store API) | Variable |
 | Magento 2 | `/rest/V1/products` | None (guest default) | searchCriteria |
 
-### Tier 2: Schema.org JSON-LD
+### Tier 2: UnifiedCrawl
 
-- Fetches HTML via **httpx** (no browser). Browser fallback only on HTTP 403/429/503.
-- Parses `<script type="application/ld+json">` for Product objects.
-- Enriches sparse JSON-LD with OpenGraph meta tags from the same page.
-- Zero cost, zero browser overhead for most sites.
+Single crawl that extracts from 4 layers, replacing the previous separate Schema.org
+and OpenGraph probes:
 
-### Tier 3: OpenGraph meta tags
+1. **JSON-LD** from `result.html` (via `SchemaOrgExtractor.extract_from_html`)
+2. **OG tags** from `result.metadata` (via `OpenGraphExtractor.from_metadata`)
+3. **Markdown price/title** from `result.markdown` (via `MarkdownPriceExtractor` -- regex, no LLM)
+4. **Best image** from `result.media` (crawl4ai scored images, no re-fetch)
 
-- Same httpx-first approach, browser fallback on 403/429/503 only.
-- Extracts `og:title`, `og:image`, `og:price:amount`, `product:price:amount` etc.
-- Zero cost.
+Layer 1 wins; gaps filled by layers 2-4 without overwriting.
 
-### Tier 4: SmartCSS (requires `LLM_API_KEY` env var)
+- **httpx fast path**: fetches HTML via httpx, parses JSON-LD + OG. If product has price + image,
+  returns immediately (no browser). Browser only launches when price/image missing.
+- **Browser path**: uses `get_browser_config()` with `scan_full_page=True`, `max_scroll_steps=20`.
+  Stealth escalation via existing 3-tier system (STANDARD -> STEALTH -> UNDETECTED).
+- **Batch mode**: `extract_batch()` uses `arun_many()` with `MemoryAdaptiveDispatcher`, single browser.
+- Zero cost, browser overhead only when needed.
+
+Note: `SchemaOrgExtractor` and `OpenGraphExtractor` classes still exist -- their static
+parsing methods are reused by UnifiedCrawl, but their HTTP `extract(url)` methods are
+no longer called by the pipeline.
+
+### Tier 3: SmartCSS (requires `LLM_API_KEY` env var)
 
 - Uses `JsonCssExtractionStrategy.generate_schema()` to auto-create CSS selectors.
 - One-time LLM call per domain, cached via SchemaCache (Redis, 7-day TTL).
@@ -90,7 +100,7 @@ nothing, falls back to the probe chain below.
 - Robustness scoring rejects brittle selectors (nth-child-heavy schemas < 0.3 rejected).
 - **Not wired in default task runner** -- only active when Pipeline receives a SmartCSSExtractor.
 
-### Tier 5: LLM extraction (requires `LLM_API_KEY` env var)
+### Tier 4: LLM extraction (requires `LLM_API_KEY` env var)
 
 - Uses `LLMExtractionStrategy` with `input_format="markdown"` (40-60% token reduction).
 - `chunk_token_threshold=8000`, `overlap_rate=0.1`.
@@ -111,7 +121,7 @@ without overwriting existing values.
 
 ### Shopify API Price Supplementation
 
-When a Shopify store falls back from API to Schema.org (headless stores),
+When a Shopify store falls back from API to UnifiedCrawl (headless stores),
 `_supplement_shopify_prices()` fetches canonical pricing from `/products.json`
 to fix zero-price and geo-currency issues. Tries `shop.{domain}` as alternative
 endpoint for headless stores (Hydrogen/custom frontends).
@@ -159,10 +169,8 @@ All results filtered through `is_non_product_url()` denylist (blog, about, cart,
 ### Verification Pass
 
 After extraction, `CompletenessChecker` identifies products missing price or image.
-If <= 50 URLs need re-extraction, targeted passes run:
-- Missing price -> Schema.org re-extraction
-- Missing image -> OpenGraph re-extraction
-
+If <= 50 URLs need re-extraction, targeted passes run via UnifiedCrawl
+(or Schema.org/OpenGraph static parsers for specific field gaps).
 Results merged back without overwriting existing fields.
 
 ### Job States
@@ -187,6 +195,11 @@ GET    /api/v1/dlq                  -> Dead letter queue inspection
 POST   /api/v1/dlq/{job_id}/retry   -> Replay failed job
 GET    /api/v1/analytics            -> Extraction analytics
 GET    /api/v1/exports/idealo/csv   -> Idealo CSV feed export
+GET    /api/v1/auth/bigcommerce/connect?shop=X -> Initiate BigCommerce OAuth
+GET    /api/v1/auth/bigcommerce/callback       -> BigCommerce OAuth callback
+DELETE /api/v1/auth/bigcommerce/disconnect?shop=X -> Revoke BigCommerce connection
+GET    /api/v1/auth/connections     -> List all OAuth connections
+GET    /api/v1/auth/connections/{domain} -> Connection status for a shop
 GET    /health                       -> Health check
 GET    /readiness                    -> Readiness check
 ```
@@ -194,6 +207,7 @@ GET    /readiness                    -> Readiness check
 ## Security
 
 - **API Key auth**: `X-API-Key` header, verified per request
+- **OAuth token encryption**: Fernet symmetric encryption at rest for stored OAuth tokens
 - **SSRF prevention**: URL validation (scheme allowlist, private IP blocking, port restrictions)
 - **XML safety**: defusedxml blocks entity expansion attacks (Billion Laughs)
 - **Response size limits**: MAX_RESPONSE_SIZE (10MB) on all fetched content
@@ -245,6 +259,7 @@ merchant_onboarding/
 |   |       +-- dlq.py                # GET /dlq, POST /dlq/{id}/retry
 |   |       +-- analytics.py          # GET /analytics
 |   |       +-- exports.py           # GET /exports/idealo/csv
+|   |       +-- auth.py              # OAuth endpoints (BigCommerce connect/callback/disconnect, connections)
 |   +-- models/
 |   |   +-- product.py                # Product Pydantic model (unified schema)
 |   |   +-- job.py                    # OnboardingJob model (request/response/status)
@@ -271,8 +286,11 @@ merchant_onboarding/
 |   |   +-- shopify_api.py            # Fetches /products.json
 |   |   +-- woocommerce_api.py        # Fetches WooCommerce Store API
 |   |   +-- magento_api.py            # Fetches Magento REST API
-|   |   +-- schema_org_extractor.py   # JSON-LD extraction (httpx first, browser fallback on 403/429/503)
-|   |   +-- opengraph_extractor.py    # OG meta tags (httpx first, browser fallback on 403/429/503)
+|   |   +-- bigcommerce_admin_extractor.py # BigCommerce Admin API V3 via OAuth (GTIN/UPC first-class)
+|   |   +-- unified_crawl_extractor.py # Single crawl: JSON-LD + OG + markdown price + media (replaces separate Schema.org/OG probes)
+|   |   +-- markdown_price_extractor.py # Regex-based price/title extraction from rendered markdown
+|   |   +-- schema_org_extractor.py   # JSON-LD parsing (static methods reused by UnifiedCrawl)
+|   |   +-- opengraph_extractor.py    # OG meta tag parsing (static methods reused by UnifiedCrawl)
 |   |   +-- css_extractor.py          # crawl4ai JsonCssExtractionStrategy with stealth escalation
 |   |   +-- smart_css_extractor.py    # LLM-generated CSS selectors, cached per domain (requires LLM_API_KEY)
 |   |   +-- llm_extractor.py          # Universal LLM extraction (requires LLM_API_KEY)
@@ -294,6 +312,7 @@ merchant_onboarding/
 |   |   +-- supabase_client.py        # DatabaseClient (asyncpg pool init + connection)
 |   |   +-- bulk_ingestor.py          # Staging table -> COPY -> upsert operations
 |   |   +-- queries.py                # Raw SQL queries
+|   |   +-- oauth_store.py            # Encrypted OAuth token storage (Fernet + asyncpg)
 |   +-- workers/
 |   |   +-- celery_app.py             # Celery config + app factory
 |   |   +-- tasks.py                  # Celery task: creates Pipeline with infra components, runs it
@@ -354,8 +373,12 @@ merchant_onboarding/
 | `ShopifyAPIExtractor` | Fetches `/products.json`, returns raw product dicts. No normalization. |
 | `WooCommerceAPIExtractor` | Fetches WooCommerce Store API, returns raw dicts. No normalization. |
 | `MagentoAPIExtractor` | Fetches Magento REST API, returns raw dicts. No normalization. |
-| `SchemaOrgExtractor` | Fetches HTML via httpx (browser fallback on 403/429/503), parses JSON-LD. |
-| `OpenGraphExtractor` | Fetches HTML via httpx (browser fallback on 403/429/503), parses OG meta tags. |
+| `BigCommerceAdminExtractor` | Fetches BigCommerce Admin API V3 via OAuth. UPC/GTIN first-class. Brand resolution via cache. |
+| `OAuthStore` | Encrypted OAuth token CRUD (Fernet). Supports OAuth 2.0 + 1.0a fields. |
+| `UnifiedCrawlExtractor` | Single crawl extracting JSON-LD + OG + markdown price + media. httpx fast path, browser fallback. |
+| `MarkdownPriceExtractor` | Regex-based price/title/currency extraction from rendered markdown. No LLM. |
+| `SchemaOrgExtractor` | JSON-LD parsing. Static methods reused by UnifiedCrawl; `extract(url)` no longer called by pipeline. |
+| `OpenGraphExtractor` | OG meta tag parsing. Static methods reused by UnifiedCrawl; `extract(url)` no longer called by pipeline. |
 | `CSSExtractor` | Browser-based extraction via `JsonCssExtractionStrategy`. Stealth escalation. |
 | `SmartCSSExtractor` | Generates CSS selectors per domain via LLM, caches, reuses. Requires LLM API key. |
 | `LLMExtractor` | Universal LLM extraction via `LLMExtractionStrategy`. Requires LLM API key. |
@@ -389,13 +412,17 @@ merchant_onboarding/
 - Three-tier stealth escalation: `STANDARD -> STEALTH -> UNDETECTED`
 - Browser config via `browser_config.py`: `get_browser_config()`, `get_crawl_config()`, `get_crawler_strategy()`
 
-### HTTP-Based Extractors (Schema.org, OpenGraph)
+### UnifiedCrawl Extractor
 
-- Use **httpx** for fast, browserless HTML fetching
-- `fetch_html_with_browser()` shared helper for 403/429/503 fallback only
-- No browser overhead for most sites
+- httpx fast path: fetches HTML, parses JSON-LD + OG. Returns immediately if price + image found.
+- Browser fallback: launches only when structured data is incomplete (missing price/image).
+- Reuses `SchemaOrgExtractor.extract_from_html()` and `OpenGraphExtractor.from_metadata()` as static parsers.
+- `MarkdownPriceExtractor` extracts price/title from `result.markdown` via regex (no LLM).
+- `result.media` provides scored images (crawl4ai 0-8 scoring, threshold 2).
+- `extract_batch()` uses `arun_many()` with `MemoryAdaptiveDispatcher` for single-browser batching.
+- `fetch_html_with_browser()` shared helper for browser fallback.
 
-### LLM-Specific (Tier 4-5)
+### LLM-Specific (Tier 3-4)
 
 - `LLMExtractionStrategy`: `input_format="markdown"`, `chunk_token_threshold=8000`, `overlap_rate=0.1`
 - `generate_schema()`: one-time LLM call, cached via SchemaCache
@@ -411,15 +438,14 @@ merchant_onboarding/
 ## Known Limitations
 
 1. **Per-URL browser spawning**: Pipeline calls `extract()` (new browser per URL) instead of
-   `extract_batch()` (single browser for batch). Only affects CSS/SmartCSS/LLM tiers. Schema.org
-   and OpenGraph use httpx, no browser. Concurrency capped at 10, so max ~10 browsers at once
-   per job, not thousands.
+   `extract_batch()` (single browser for batch). Only affects CSS/SmartCSS/LLM tiers. UnifiedCrawl
+   uses httpx fast path (no browser) for most sites. Concurrency capped at 10.
 
 2. **No distributed resource coordination**: Circuit breaker and rate limiter are per-process.
    Multiple Celery workers on different machines don't share state. Fine for single-node
    deployment, needs Redis-backed alternatives for multi-node.
 
-3. **Tiers 4-5 not wired in default task**: `workers/tasks.py` creates Pipeline without
+3. **Tiers 3-4 not wired in default task**: `workers/tasks.py` creates Pipeline without
    SmartCSSExtractor or LLMExtractor. These tiers require `LLM_API_KEY` env var and
    explicit wiring in the task runner.
 
