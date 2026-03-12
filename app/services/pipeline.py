@@ -45,6 +45,7 @@ from app.services.merchant_profile_normalizer import MerchantProfileNormalizer
 if TYPE_CHECKING:
     from app.db.bulk_ingestor import BulkIngestor
     from app.db.merchant_profile_ingestor import MerchantProfileIngestor
+    from app.db.oauth_store import OAuthStore
     from app.extractors.llm_extractor import LLMExtractor
     from app.extractors.smart_css_extractor import SmartCSSExtractor
     from app.infra.circuit_breaker import CircuitBreaker
@@ -83,6 +84,7 @@ class Pipeline:
         llm_extractor: LLMExtractor | None = None,
         llm_budget: LLMBudgetTracker | None = None,
         profile_ingestor: MerchantProfileIngestor | None = None,
+        oauth_store: OAuthStore | None = None,
     ):
         """Initialize pipeline with infrastructure components.
 
@@ -95,6 +97,7 @@ class Pipeline:
             llm_extractor: Optional universal LLM extractor (Tier 5)
             llm_budget: Optional LLM cost budget tracker (for Tier 4-5)
             profile_ingestor: Optional merchant profile ingestor for database operations
+            oauth_store: Optional OAuth token store for authenticated platform APIs
         """
         self.detector = PlatformDetector()
         self.discovery = URLDiscoveryService()
@@ -113,6 +116,7 @@ class Pipeline:
         self.smart_css = smart_css_extractor
         self.llm_extractor = llm_extractor
         self.llm_budget = llm_budget
+        self.oauth_store = oauth_store
         self._http_client: httpx.AsyncClient | None = None
 
     async def _emit_extraction_metadata(
@@ -592,6 +596,45 @@ class Pipeline:
             )
 
         elif platform == Platform.BIGCOMMERCE:
+            # Try authenticated BigCommerce Admin API first
+            if self.oauth_store:
+                bc_conn = await self.oauth_store.get_connection("bigcommerce", shop_url)
+                if not bc_conn:
+                    # Try matching by domain without scheme
+                    from urllib.parse import urlparse
+                    domain = urlparse(shop_url).netloc or shop_url
+                    bc_conn = await self.oauth_store.get_connection_by_domain(domain)
+                if bc_conn:
+                    from app.extractors.bigcommerce_admin_extractor import BigCommerceAdminExtractor
+                    extraction_tier = ExtractionTier.BIGCOMMERCE_API
+                    try:
+                        bc_extractor = BigCommerceAdminExtractor(bc_conn)
+                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                        raw_products = await self._extract_with_circuit_breaker(
+                            bc_extractor, shop_url, shop_url
+                        )
+                        if raw_products:
+                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                            tracker.record_success(shop_url, len(raw_products))
+                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                        else:
+                            tracker.record_empty(shop_url)
+                    except Exception as e:
+                        logger.warning("BigCommerce Admin API failed, falling back to scraping: %s", e)
+                        raw_products = []
+
+                    if raw_products:
+                        audit = tracker.build_audit()
+                        quality_score = self.quality_scorer.score_batch(raw_products)
+                        return ExtractionResult(
+                            products=raw_products,
+                            tier=extraction_tier,
+                            quality_score=quality_score,
+                            urls_attempted=len(urls),
+                            audit=audit.to_summary_dict(),
+                        )
+
+            # Fallback to scraping chain
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
                 urls, shop_url, job_id, css_schema=BIGCOMMERCE_SCHEMA, tracker=tracker
             )

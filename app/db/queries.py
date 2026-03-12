@@ -274,6 +274,79 @@ SET retention_expires_at = created_at + ($1 || ' days')::INTERVAL
 WHERE retention_expires_at IS NULL;
 """
 
+# --- OAuth Connections ---
+
+CREATE_OAUTH_CONNECTIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS oauth_connections (
+    id BIGSERIAL PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL,
+    shop_domain VARCHAR(255) NOT NULL,
+    access_token_encrypted BYTEA,
+    refresh_token_encrypted BYTEA,
+    token_expires_at TIMESTAMPTZ,
+    scopes TEXT,
+    consumer_key_encrypted BYTEA,
+    consumer_secret_encrypted BYTEA,
+    access_token_secret_encrypted BYTEA,
+    store_hash VARCHAR(100),
+    extra_data JSONB DEFAULT '{}',
+    connected_at TIMESTAMPTZ DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ,
+    status VARCHAR(20) DEFAULT 'active',
+    UNIQUE(platform, shop_domain)
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_connections_domain ON oauth_connections(shop_domain);
+CREATE INDEX IF NOT EXISTS idx_oauth_connections_platform ON oauth_connections(platform);
+"""
+
+UPSERT_OAUTH_CONNECTION = """
+INSERT INTO oauth_connections (
+    platform, shop_domain, access_token_encrypted,
+    refresh_token_encrypted, token_expires_at, scopes,
+    consumer_key_encrypted, consumer_secret_encrypted,
+    access_token_secret_encrypted, store_hash, extra_data, status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active')
+ON CONFLICT (platform, shop_domain) DO UPDATE SET
+    access_token_encrypted = EXCLUDED.access_token_encrypted,
+    refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
+    token_expires_at = EXCLUDED.token_expires_at,
+    scopes = EXCLUDED.scopes,
+    consumer_key_encrypted = EXCLUDED.consumer_key_encrypted,
+    consumer_secret_encrypted = EXCLUDED.consumer_secret_encrypted,
+    access_token_secret_encrypted = EXCLUDED.access_token_secret_encrypted,
+    store_hash = EXCLUDED.store_hash,
+    extra_data = EXCLUDED.extra_data,
+    status = 'active',
+    connected_at = NOW();
+"""
+
+SELECT_OAUTH_CONNECTION = """
+SELECT * FROM oauth_connections
+WHERE platform = $1 AND shop_domain = $2 AND status = 'active';
+"""
+
+SELECT_OAUTH_CONNECTION_BY_DOMAIN = """
+SELECT * FROM oauth_connections
+WHERE shop_domain = $1 AND status = 'active';
+"""
+
+SELECT_ALL_OAUTH_CONNECTIONS = """
+SELECT id, platform, shop_domain, scopes, store_hash,
+       connected_at, last_used_at, status
+FROM oauth_connections
+ORDER BY connected_at DESC;
+"""
+
+DELETE_OAUTH_CONNECTION = """
+UPDATE oauth_connections SET status = 'revoked'
+WHERE platform = $1 AND shop_domain = $2;
+"""
+
+UPDATE_OAUTH_LAST_USED = """
+UPDATE oauth_connections SET last_used_at = NOW()
+WHERE platform = $1 AND shop_domain = $2;
+"""
+
 # Migration: add idealo-required columns to existing products table
 ALTER_PRODUCTS_ADD_IDEALO_FIELDS = """
 ALTER TABLE products ADD COLUMN IF NOT EXISTS gtin TEXT;

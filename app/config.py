@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     respect_robots_txt: bool = True
     dlq_ttl_seconds: int = 2592000  # 30 days
 
+    # OAuth / Platform Integration
+    oauth_encryption_key: str = ""  # Fernet key for encrypting OAuth tokens at rest
+    jwt_secret_key: str = "change-me-in-production"  # JWT signing key for merchant sessions
+    jwt_expiry_hours: int = 24
+    bigcommerce_client_id: str = ""
+    bigcommerce_client_secret: str = ""
+    bigcommerce_callback_url: str = "http://localhost:8000/api/v1/auth/bigcommerce/callback"
+
     # LLM Extraction
     llm_provider: str = "openai/gpt-4o-mini"
     llm_api_key: str = ""

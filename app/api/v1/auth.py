@@ -1,0 +1,167 @@
+"""OAuth authentication endpoints for platform integrations."""
+
+from __future__ import annotations
+
+import logging
+from urllib.parse import urlencode
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.api.deps import get_db, verify_api_key
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _get_oauth_store(db):
+    """Create OAuthStore from DB client."""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    from app.db.oauth_store import OAuthStore
+    return OAuthStore(db)
+
+
+# ── BigCommerce OAuth ────────────────────────────────────────────────
+
+
+@router.get("/bigcommerce/connect")
+async def bigcommerce_connect(
+    shop: str = Query(..., description="BigCommerce store domain (e.g. store-abc123.mybigcommerce.com)"),
+    _: str = Depends(verify_api_key),
+) -> dict:
+    """Initiate BigCommerce OAuth flow.
+
+    Returns the authorization URL that the merchant should be redirected to.
+    The merchant approves access, then BigCommerce redirects to our callback.
+    """
+    if not settings.bigcommerce_client_id:
+        raise HTTPException(status_code=501, detail="BigCommerce OAuth not configured")
+
+    # BigCommerce OAuth install URL
+    # For single-click apps the URL is different, but for token-based auth:
+    params = urlencode({
+        "client_id": settings.bigcommerce_client_id,
+        "scope": "store_v2_products_read_only",
+        "response_type": "code",
+        "redirect_uri": settings.bigcommerce_callback_url,
+        "context": f"stores/{shop}",
+    })
+    auth_url = f"https://login.bigcommerce.com/oauth2/authorize?{params}"
+
+    return {"auth_url": auth_url, "shop": shop}
+
+
+@router.get("/bigcommerce/callback")
+async def bigcommerce_callback(
+    code: str = Query(...),
+    scope: str = Query(...),
+    context: str = Query(...),
+    db=Depends(get_db),
+) -> dict:
+    """Handle BigCommerce OAuth callback — exchange code for permanent access token.
+
+    BigCommerce redirects here after merchant approves. We exchange the
+    authorization code for an access token (which never expires).
+    """
+    if not settings.bigcommerce_client_id or not settings.bigcommerce_client_secret:
+        raise HTTPException(status_code=501, detail="BigCommerce OAuth not configured")
+
+    # Extract store hash from context (format: "stores/abc123")
+    store_hash = context.replace("stores/", "") if context.startswith("stores/") else context
+
+    # Exchange authorization code for access token
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://login.bigcommerce.com/oauth2/token",
+            json={
+                "client_id": settings.bigcommerce_client_id,
+                "client_secret": settings.bigcommerce_client_secret,
+                "code": code,
+                "scope": scope,
+                "grant_type": "authorization_code",
+                "redirect_uri": settings.bigcommerce_callback_url,
+                "context": context,
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.error("BigCommerce token exchange failed: %d %s", resp.status_code, resp.text)
+        raise HTTPException(status_code=502, detail="Failed to exchange BigCommerce authorization code")
+
+    token_data = resp.json()
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=502, detail="BigCommerce did not return an access token")
+
+    # Store encrypted in DB
+    oauth_store = _get_oauth_store(db)
+    shop_domain = token_data.get("context", context).replace("stores/", "")
+
+    await oauth_store.store_connection(
+        platform="bigcommerce",
+        shop_domain=shop_domain,
+        access_token=access_token,
+        scopes=scope,
+        store_hash=store_hash,
+        extra_data={
+            "user_id": token_data.get("user", {}).get("id"),
+            "user_email": token_data.get("user", {}).get("email"),
+        },
+    )
+
+    logger.info("BigCommerce OAuth connected: store_hash=%s", store_hash)
+    return {
+        "status": "connected",
+        "platform": "bigcommerce",
+        "store_hash": store_hash,
+    }
+
+
+@router.delete("/bigcommerce/disconnect")
+async def bigcommerce_disconnect(
+    shop: str = Query(..., description="BigCommerce store hash or domain"),
+    _: str = Depends(verify_api_key),
+    db=Depends(get_db),
+) -> dict:
+    """Revoke BigCommerce OAuth connection."""
+    oauth_store = _get_oauth_store(db)
+    await oauth_store.revoke_connection("bigcommerce", shop)
+    return {"status": "disconnected", "platform": "bigcommerce", "shop": shop}
+
+
+# ── Connection Management ────────────────────────────────────────────
+
+
+@router.get("/connections")
+async def list_connections(
+    _: str = Depends(verify_api_key),
+    db=Depends(get_db),
+) -> list[dict]:
+    """List all active OAuth connections (tokens not exposed)."""
+    oauth_store = _get_oauth_store(db)
+    return await oauth_store.list_connections()
+
+
+@router.get("/connections/{shop_domain:path}")
+async def get_connection_status(
+    shop_domain: str,
+    _: str = Depends(verify_api_key),
+    db=Depends(get_db),
+) -> dict:
+    """Check OAuth connection status for a specific shop domain."""
+    oauth_store = _get_oauth_store(db)
+    conn = await oauth_store.get_connection_by_domain(shop_domain)
+    if not conn:
+        return {"connected": False, "shop_domain": shop_domain}
+    return {
+        "connected": True,
+        "platform": conn.platform,
+        "shop_domain": conn.shop_domain,
+        "store_hash": conn.store_hash,
+        "scopes": conn.scopes,
+        "connected_at": conn.connected_at.isoformat() if conn.connected_at else None,
+        "last_used_at": conn.last_used_at.isoformat() if conn.last_used_at else None,
+    }
