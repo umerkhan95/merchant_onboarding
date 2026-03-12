@@ -191,7 +191,7 @@ async def test_pipeline_generic_schema_org_fallback(pipeline, mock_progress_trac
                 "https://example.com/product2",
             ]
 
-            with patch("app.services.pipeline.SchemaOrgExtractor") as mock_extractor_class:
+            with patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_extractor_class:
                 product_data = {
                     "name": "Schema.org Product",
                     "description": "Product description",
@@ -212,7 +212,7 @@ async def test_pipeline_generic_schema_org_fallback(pipeline, mock_progress_trac
 
                 assert result["platform"] == "generic"
                 assert result["total_extracted"] == 2  # 2 URLs
-                assert result["extraction_tier"] == "schema_org"
+                assert result["extraction_tier"] == "unified_crawl"
 
 
 @pytest.mark.asyncio
@@ -422,20 +422,15 @@ async def test_pipeline_bigcommerce_css_extraction(pipeline, mock_progress_track
                 "https://example.com/product2",
             ]
 
-            # BigCommerce now goes through fallback chain: Schema.org → OG → CSS
-            # Mock Schema.org to return empty (no structured data)
+            # BigCommerce goes through fallback chain: UnifiedCrawl → CSS
+            # Mock UnifiedCrawl to return empty (no structured data)
             with (
-                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
-                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+                patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class,
                 patch("app.services.pipeline.CSSExtractor") as mock_css_class,
             ):
-                mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[]))
-                mock_schema_class.return_value = mock_schema
-
-                mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[]))
-                mock_og_class.return_value = mock_og
+                mock_unified = AsyncMock()
+                mock_unified.extract = AsyncMock(return_value=ExtractorResult(products=[]))
+                mock_unified_class.return_value = mock_unified
 
                 bc_product = {
                     "title": "BigCommerce Product",
@@ -460,7 +455,11 @@ async def test_pipeline_bigcommerce_css_extraction(pipeline, mock_progress_track
 
 @pytest.mark.asyncio
 async def test_pipeline_skips_low_quality_probe(pipeline, mock_progress_tracker):
-    """Test that fallback chain skips tiers where probe quality is too low."""
+    """Test that fallback chain skips tiers where probe quality is too low.
+
+    When UnifiedCrawl probe returns low-quality data (no title), the pipeline
+    should fall through to CSS fallback.
+    """
     with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
         mock_detect.return_value = PlatformResult(
             platform=Platform.GENERIC,
@@ -475,41 +474,36 @@ async def test_pipeline_skips_low_quality_probe(pipeline, mock_progress_tracker)
             ]
 
             with (
-                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
-                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+                patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class,
                 patch("app.services.pipeline.CSSExtractor") as mock_css_class,
             ):
-                # Schema.org returns products without titles (quality = 0.0)
-                mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[{"price": "$10"}]))
-                mock_schema_class.return_value = mock_schema
-
-                # OG returns good products (quality > 0.3)
-                og_product = {
-                    "og:title": "Good Product",
-                    "og:description": "A product",
-                    "og:image": "https://example.com/img.jpg",
-                }
-                mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[og_product]))
-                mock_og.extract_batch = AsyncMock(
-                    return_value=ExtractorResult(products=[og_product, og_product])
+                # UnifiedCrawl returns products without titles (quality = 0.0)
+                mock_unified = AsyncMock()
+                mock_unified.extract = AsyncMock(
+                    return_value=ExtractorResult(products=[{"price": "$10"}])
                 )
-                mock_og_class.return_value = mock_og
+                mock_unified_class.return_value = mock_unified
 
+                # CSS fallback returns good products
+                css_product = {
+                    "name": "CSS Product",
+                    "description": "A product",
+                    "image": "https://example.com/img.jpg",
+                    "price": "29.99",
+                }
                 mock_css = AsyncMock()
+                mock_css.extract = AsyncMock(
+                    return_value=ExtractorResult(products=[css_product])
+                )
                 mock_css_class.return_value = mock_css
 
                 result = await pipeline.run("job-quality-gate", "https://example.com")
 
-                # Should have used OG tier (Schema.org was skipped due to low quality)
-                assert result["extraction_tier"] == "opengraph"
-                assert result["total_extracted"] == 2
+                # Should have fallen through to CSS (deep_crawl) tier
+                assert result["extraction_tier"] == "deep_crawl"
 
-                # Schema.org extractor should have been called only once (probe)
-                assert mock_schema.extract.call_count == 1
-                # OG: 1 probe + 2 per-URL tracked extraction calls
-                assert mock_og.extract.call_count == 3
+                # UnifiedCrawl should have been called once (probe only)
+                assert mock_unified.extract.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -529,11 +523,10 @@ async def test_pipeline_needs_review_on_zero_products_after_extraction(
 
             # All extractors return empty
             with (
-                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
-                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+                patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class,
                 patch("app.services.pipeline.CSSExtractor") as mock_css_class,
             ):
-                for mock_class in [mock_schema_class, mock_og_class, mock_css_class]:
+                for mock_class in [mock_unified_class, mock_css_class]:
                     mock_ext = AsyncMock()
                     mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[]))
                     mock_ext.extract_batch = AsyncMock(return_value=ExtractorResult(products=[]))
@@ -576,10 +569,10 @@ async def test_pipeline_uses_tracked_extraction_for_full_extraction(
                 "sku": "BATCH-1",
             }
 
-            with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
+            with patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class:
                 mock_extractor = AsyncMock()
                 mock_extractor.extract = AsyncMock(return_value=ExtractorResult(products=[product_data]))
-                mock_schema_class.return_value = mock_extractor
+                mock_unified_class.return_value = mock_extractor
 
                 result = await pipeline.run("job-tracked", "https://example.com")
 
@@ -611,8 +604,8 @@ async def test_pipeline_shopify_fallback_on_empty_api_response(pipeline, mock_pr
                 mock_shopify.extract = AsyncMock(return_value=ExtractorResult(products=[]))
                 mock_shopify_class.return_value = mock_shopify
 
-                # Schema.org returns good data as fallback
-                with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
+                # UnifiedCrawl returns good data as fallback
+                with patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class:
                     product_data = {
                         "name": "Fallback Product",
                         "description": "Product from fallback",
@@ -620,29 +613,29 @@ async def test_pipeline_shopify_fallback_on_empty_api_response(pipeline, mock_pr
                         "image": "https://example.com/img.jpg",
                         "sku": "FALL-1",
                     }
-                    mock_schema = AsyncMock()
-                    mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[product_data]))
-                    mock_schema.extract_batch = AsyncMock(
+                    mock_unified = AsyncMock()
+                    mock_unified.extract = AsyncMock(return_value=ExtractorResult(products=[product_data]))
+                    mock_unified.extract_batch = AsyncMock(
                         return_value=ExtractorResult(products=[product_data, product_data])
                     )
-                    mock_schema_class.return_value = mock_schema
+                    mock_unified_class.return_value = mock_unified
 
                     result = await pipeline.run("job-shopify-fallback", "https://example.com")
 
-                    # Should have fallen back to Schema.org tier
+                    # Should have fallen back to UnifiedCrawl tier
                     assert result["platform"] == "shopify"
                     assert result["total_extracted"] == 2
-                    assert result["extraction_tier"] == "schema_org"
+                    assert result["extraction_tier"] == "unified_crawl"
 
                     # Shopify API: 1 initial + 2 supplementation attempts (main + shop.{domain})
                     assert mock_shopify.extract.call_count == 3
-                    # Schema.org: 1 probe + 2 per-URL tracked calls
-                    assert mock_schema.extract.call_count == 3
+                    # UnifiedCrawl: 1 probe + 2 per-URL tracked calls
+                    assert mock_unified.extract.call_count == 3
 
 
 @pytest.mark.asyncio
-async def test_pipeline_opengraph_tier_correct(pipeline, mock_progress_tracker):
-    """Test that OpenGraph extraction returns correct ExtractionTier.OPENGRAPH."""
+async def test_pipeline_unified_crawl_tier_correct(pipeline, mock_progress_tracker):
+    """Test that UnifiedCrawl extraction returns correct ExtractionTier.UNIFIED_CRAWL."""
     with patch("app.services.pipeline.PlatformDetector.detect") as mock_detect:
         mock_detect.return_value = PlatformResult(
             platform=Platform.GENERIC,
@@ -653,29 +646,21 @@ async def test_pipeline_opengraph_tier_correct(pipeline, mock_progress_tracker):
         with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
             mock_discover.return_value = ["https://example.com/product1"]
 
-            # Schema.org returns empty, OpenGraph succeeds
-            with (
-                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
-                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
-            ):
-                mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[]))
-                mock_schema_class.return_value = mock_schema
-
-                og_product = {
-                    "og:title": "OpenGraph Product",
-                    "og:description": "OG description",
-                    "og:image": "https://example.com/og.jpg",
-                    "og:price:amount": "19.99",
+            with patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class:
+                unified_product = {
+                    "name": "Unified Product",
+                    "description": "Extracted via unified crawl",
+                    "image": "https://example.com/img.jpg",
+                    "offers": {"price": "19.99", "priceCurrency": "USD"},
                 }
-                mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[og_product]))
-                mock_og.extract_batch = AsyncMock(return_value=ExtractorResult(products=[og_product]))
-                mock_og_class.return_value = mock_og
+                mock_unified = AsyncMock()
+                mock_unified.extract = AsyncMock(return_value=ExtractorResult(products=[unified_product]))
+                mock_unified.extract_batch = AsyncMock(return_value=ExtractorResult(products=[unified_product]))
+                mock_unified_class.return_value = mock_unified
 
-                result = await pipeline.run("job-og-tier", "https://example.com")
+                result = await pipeline.run("job-unified-tier", "https://example.com")
 
-                assert result["extraction_tier"] == "opengraph"
+                assert result["extraction_tier"] == "unified_crawl"
                 assert result["total_extracted"] == 1
 
 
@@ -697,16 +682,14 @@ async def test_pipeline_logs_warnings_when_smart_css_and_llm_not_configured(
         with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
             mock_discover.return_value = ["https://example.com/product1"]
 
-            # All extractors return empty except hardcoded CSS
+            # UnifiedCrawl returns empty, CSS fallback used
             with (
-                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
-                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
+                patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class,
                 patch("app.services.pipeline.CSSExtractor") as mock_css_class,
             ):
-                for mock_class in [mock_schema_class, mock_og_class]:
-                    mock_ext = AsyncMock()
-                    mock_ext.extract = AsyncMock(return_value=ExtractorResult(products=[]))
-                    mock_class.return_value = mock_ext
+                mock_unified = AsyncMock()
+                mock_unified.extract = AsyncMock(return_value=ExtractorResult(products=[]))
+                mock_unified_class.return_value = mock_unified
 
                 # CSS returns data so we don't trigger needs_review
                 css_product = {
@@ -856,35 +839,23 @@ async def test_pipeline_merges_partial_probes(pipeline, mock_progress_tracker):
         with patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover:
             mock_discover.return_value = ["https://example.com/product1"]
 
-            with (
-                patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
-                patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
-            ):
-                # Schema.org returns partial data (no title → quality 0.0, fails probe)
-                schema_product = {
+            with patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class:
+                # UnifiedCrawl returns good data (has title + price → passes quality gate)
+                unified_product = {
+                    "name": "Product",
+                    "description": "Desc",
+                    "image": "https://example.com/img.jpg",
                     "offers": {"price": "19.99", "priceCurrency": "USD"},
-                    "image": "https://example.com/schema-img.jpg",
                 }
-                mock_schema = AsyncMock()
-                mock_schema.extract = AsyncMock(return_value=ExtractorResult(products=[schema_product]))
-                mock_schema_class.return_value = mock_schema
-
-                # OG returns good data (has title → passes quality gate)
-                og_product = {
-                    "og:title": "Product",
-                    "og:description": "Desc",
-                    "og:image": "https://example.com/og-img.jpg",
-                }
-                mock_og = AsyncMock()
-                mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[og_product]))
-                # extract_batch returns same product — should get merged with Schema.org partial
-                mock_og.extract_batch = AsyncMock(return_value=ExtractorResult(products=[og_product.copy()]))
-                mock_og_class.return_value = mock_og
+                mock_unified = AsyncMock()
+                mock_unified.extract = AsyncMock(return_value=ExtractorResult(products=[unified_product]))
+                mock_unified.extract_batch = AsyncMock(return_value=ExtractorResult(products=[unified_product.copy()]))
+                mock_unified_class.return_value = mock_unified
 
                 result = await pipeline.run("job-merge", "https://example.com")
 
-                # OG should win as primary tier
-                assert result["extraction_tier"] == "opengraph"
+                # UnifiedCrawl should win as primary tier
+                assert result["extraction_tier"] == "unified_crawl"
                 assert result["total_extracted"] == 1
 
 
@@ -1274,16 +1245,16 @@ async def test_pipeline_shopify_fallback_triggers_supplementation(
                 ])
                 mock_shopify_class.return_value = mock_shopify
 
-                # Schema.org returns products but with zero prices (no offers)
-                with patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class:
-                    schema_product_sock = {
+                # UnifiedCrawl returns products but with zero prices (no offers)
+                with patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_unified_class:
+                    unified_product_sock = {
                         "name": "Sock",
                         "@type": "Product",
                         "url": "https://example.com/products/sock",
                         "image": "https://example.com/sock.jpg",
                         "description": "A sock",
                     }
-                    schema_product_shirt = {
+                    unified_product_shirt = {
                         "name": "Shirt",
                         "@type": "Product",
                         "url": "https://example.com/products/shirt",
@@ -1292,22 +1263,22 @@ async def test_pipeline_shopify_fallback_triggers_supplementation(
                         "offers": {"price": "30.00", "priceCurrency": "EUR"},
                     }
 
-                    mock_schema = AsyncMock()
-                    mock_schema.extract = AsyncMock(
+                    mock_unified = AsyncMock()
+                    mock_unified.extract = AsyncMock(
                         side_effect=[
-                            ExtractorResult(products=[schema_product_sock]),  # probe
-                            ExtractorResult(products=[schema_product_sock]),  # URL 1
-                            ExtractorResult(products=[schema_product_shirt]),  # URL 2
+                            ExtractorResult(products=[unified_product_sock]),  # probe
+                            ExtractorResult(products=[unified_product_sock]),  # URL 1
+                            ExtractorResult(products=[unified_product_shirt]),  # URL 2
                         ]
                     )
-                    mock_schema_class.return_value = mock_schema
+                    mock_unified_class.return_value = mock_unified
 
                     result = await pipeline.run(
                         "job-supplement", "https://example.com"
                     )
 
                     assert result["platform"] == "shopify"
-                    assert result["extraction_tier"] == "schema_org"
+                    assert result["extraction_tier"] == "unified_crawl"
                     assert result["total_normalized"] == 2
 
 

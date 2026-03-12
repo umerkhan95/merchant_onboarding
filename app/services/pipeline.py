@@ -21,6 +21,7 @@ from app.extractors.css_extractor import CSSExtractor
 from app.extractors.magento_api import MagentoAPIExtractor
 from app.extractors.opengraph_extractor import OpenGraphExtractor
 from app.extractors.schema_org_extractor import SchemaOrgExtractor
+from app.extractors.unified_crawl_extractor import UnifiedCrawlExtractor
 from app.extractors.schemas.bigcommerce import BIGCOMMERCE_SCHEMA
 from app.extractors.schemas.generic import GENERIC_SCHEMA
 from app.extractors.shopify_api import ShopifyAPIExtractor
@@ -58,6 +59,9 @@ _PIPELINE_TIMEOUT_SECONDS = 30 * 60
 
 # Max URLs for targeted re-extraction (completeness pass)
 _MAX_REEXTRACTION_URLS = 50
+
+# Default max URLs to extract per job (prevents bans on target stores)
+_DEFAULT_MAX_URLS = 20
 
 # Concurrent extraction batch size (URLs processed in parallel per batch)
 _EXTRACTION_CONCURRENCY = 10
@@ -256,9 +260,10 @@ class Pipeline:
             )
 
             urls = await self.discovery.discover(shop_url, platform)
-            if max_urls and len(urls) > max_urls:
-                logger.info(f"Capping discovered URLs from {len(urls)} to {max_urls}")
-                urls = urls[:max_urls]
+            effective_max = max_urls or _DEFAULT_MAX_URLS
+            if len(urls) > effective_max:
+                logger.info(f"Capping discovered URLs from {len(urls)} to {effective_max}")
+                urls = urls[:effective_max]
             logger.info(f"Discovered {len(urls)} URLs for extraction")
 
             if not urls:
@@ -653,33 +658,25 @@ class Pipeline:
         async def _commit_tier(tier: ExtractionTier) -> None:
             await self.progress.set_metadata(job_id, extraction_tier=tier.value)
 
-        # Tier 2: Schema.org on first URL
-        await _set_probe_step("Schema.org")
-        schema_extractor = SchemaOrgExtractor(client=self._http_client)
-        schema_products = await self._extract_with_circuit_breaker(schema_extractor, probe_url, shop_url)
-        if self._probe_acceptable(schema_products, "Schema.org"):
-            await _commit_tier(ExtractionTier.SCHEMA_ORG)
+        # Tier 2: UnifiedCrawl (replaces separate Schema.org + OpenGraph probes)
+        # One crawl extracts JSON-LD, OG tags, markdown price, and media images.
+        await _set_probe_step("UnifiedCrawl")
+        unified_extractor = UnifiedCrawlExtractor(
+            http_client=self._http_client,
+        )
+        unified_products = await self._extract_with_circuit_breaker(
+            unified_extractor, probe_url, shop_url
+        )
+        if self._probe_acceptable(unified_products, "UnifiedCrawl"):
+            await _commit_tier(ExtractionTier.UNIFIED_CRAWL)
             products = await self._extract_from_urls_tracked(
-                schema_extractor, urls, shop_url, job_id, tracker
-            )
-            return products, ExtractionTier.SCHEMA_ORG
-        if schema_products:
-            partial_probes.extend(schema_products)
-
-        # Tier 3: OpenGraph on first URL
-        await _set_probe_step("OpenGraph")
-        og_extractor = OpenGraphExtractor(client=self._http_client)
-        og_products = await self._extract_with_circuit_breaker(og_extractor, probe_url, shop_url)
-        if self._probe_acceptable(og_products, "OpenGraph"):
-            await _commit_tier(ExtractionTier.OPENGRAPH)
-            products = await self._extract_from_urls_tracked(
-                og_extractor, urls, shop_url, job_id, tracker
+                unified_extractor, urls, shop_url, job_id, tracker
             )
             if partial_probes:
                 products = self._merge_tier_fields(products, partial_probes)
-            return products, ExtractionTier.OPENGRAPH
-        if og_products:
-            partial_probes.extend(og_products)
+            return products, ExtractionTier.UNIFIED_CRAWL
+        if unified_products:
+            partial_probes.extend(unified_products)
 
         # Tier 4: SmartCSS (auto-generated selectors, if configured)
         if self.smart_css:
@@ -765,6 +762,11 @@ class Pipeline:
         for supp in supplementary:
             for key, val in supp.items():
                 if key in merged_supplement:
+                    # Deep-merge offers dicts to preserve fields from both tiers
+                    if key == "offers" and isinstance(val, dict) and isinstance(merged_supplement[key], dict):
+                        for k, v in val.items():
+                            if k not in merged_supplement[key] and Pipeline._is_value_present(v):
+                                merged_supplement[key][k] = v  # type: ignore[union-attr]
                     continue
                 if Pipeline._is_value_present(val):
                     merged_supplement[key] = val
@@ -774,8 +776,14 @@ class Pipeline:
 
         for product in primary:
             for key, val in merged_supplement.items():
-                if not Pipeline._is_value_present(product.get(key)):
+                existing = product.get(key)
+                if not Pipeline._is_value_present(existing):
                     product[key] = val
+                elif key == "offers" and isinstance(val, dict) and isinstance(existing, dict):
+                    # Deep-merge offers: fill missing fields without overwriting
+                    for k, v in val.items():
+                        if k not in existing and Pipeline._is_value_present(v):
+                            existing[k] = v
 
         return primary
 
@@ -1114,20 +1122,29 @@ class Pipeline:
                 url_to_indices.setdefault(src, []).append(i)
 
         async def _reextract_url(extractor, url: str) -> tuple[str, list[dict]]:
-            # _extract_with_circuit_breaker returns [] on CircuitOpenError, re-raises others
             try:
                 supplement = await self._extract_with_circuit_breaker(
                     extractor, url, shop_url
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("Re-extraction failed for %s: %s", url, e)
                 supplement = []
             return url, supplement
 
-        # Concurrent re-extraction for missing prices via Schema.org
+        # Re-extract missing prices and images via UnifiedCrawl
+        # Combines JSON-LD + OG + markdown in a single pass per URL
+        urls_needing_reextract = set()
         if plan.urls_needing_price:
-            schema_extractor = SchemaOrgExtractor(client=self._http_client)
+            urls_needing_reextract.update(plan.urls_needing_price)
+        if plan.urls_needing_image:
+            urls_needing_reextract.update(plan.urls_needing_image)
+
+        if urls_needing_reextract:
+            unified_extractor = UnifiedCrawlExtractor(
+                http_client=self._http_client,
+            )
             results = await asyncio.gather(
-                *[_reextract_url(schema_extractor, u) for u in plan.urls_needing_price]
+                *[_reextract_url(unified_extractor, u) for u in urls_needing_reextract]
             )
             for url, supplement in results:
                 if supplement:
@@ -1135,31 +1152,20 @@ class Pipeline:
                         raw_products, url_to_indices.get(url, []), supplement
                     )
 
-            # Browser CSS fallback for URLs still missing prices after Schema.org.
+            # Browser CSS fallback for URLs still missing prices after UnifiedCrawl.
             # Captures JS-rendered prices (e.g. WooCommerce sites that populate
             # prices via AJAX after initial page load).
-            still_needing_price = self._urls_still_missing_price(
-                raw_products, plan.urls_needing_price, url_to_indices
-            )
-            if still_needing_price:
-                logger.info(
-                    "Browser CSS fallback: %d URLs still missing price after Schema.org",
-                    len(still_needing_price),
+            if plan.urls_needing_price:
+                still_needing_price = self._urls_still_missing_price(
+                    raw_products, plan.urls_needing_price, url_to_indices
                 )
-                await self._browser_price_reextract(
-                    raw_products, still_needing_price, url_to_indices, shop_url
-                )
-
-        # Concurrent re-extraction for missing images via OpenGraph
-        if plan.urls_needing_image:
-            og_extractor = OpenGraphExtractor(client=self._http_client)
-            results = await asyncio.gather(
-                *[_reextract_url(og_extractor, u) for u in plan.urls_needing_image]
-            )
-            for url, supplement in results:
-                if supplement:
-                    self._fill_missing_fields(
-                        raw_products, url_to_indices.get(url, []), supplement
+                if still_needing_price:
+                    logger.info(
+                        "Browser CSS fallback: %d URLs still missing price after UnifiedCrawl",
+                        len(still_needing_price),
+                    )
+                    await self._browser_price_reextract(
+                        raw_products, still_needing_price, url_to_indices, shop_url
                     )
 
         return raw_products

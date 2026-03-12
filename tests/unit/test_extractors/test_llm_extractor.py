@@ -244,15 +244,16 @@ class TestLLMExtractor:
         assert result.products[0]["title"] == "Valid"
         assert result.products[1]["title"] == "Also Valid"
 
-    def test_markdown_generator_no_pruning_filter(self, extractor):
-        """Test that markdown generator does NOT use PruningContentFilter.
+    def test_markdown_generator_uses_pruning_filter(self, extractor):
+        """Test that markdown generator uses PruningContentFilter for token reduction.
 
-        PruningContentFilter aggressively strips product content, producing
-        empty fit_markdown on most e-commerce sites. Regular markdown with
-        chunking is more reliable for LLM extraction.
+        PruningContentFilter strips navigation, footer, sidebar, and boilerplate
+        content before LLM processing, reducing token usage by 40-60%.
         """
+        from crawl4ai.content_filter_strategy import PruningContentFilter
+
         markdown_gen = extractor._create_markdown_generator()
-        assert markdown_gen.content_filter is None
+        assert isinstance(markdown_gen.content_filter, PruningContentFilter)
 
 
 class TestMergeChunkProducts:
