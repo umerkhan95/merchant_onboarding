@@ -1,11 +1,11 @@
 export const PIPELINE_STEPS = [
-  { key: "queued", label: "Queued" },
-  { key: "detecting", label: "Detecting Platform" },
-  { key: "discovering", label: "Discovering URLs" },
-  { key: "extracting", label: "Extracting Products" },
-  { key: "normalizing", label: "Normalizing Data" },
-  { key: "ingesting", label: "Ingesting to DB" },
-  { key: "completed", label: "Completed" },
+  { key: "queued", label: "Queued", icon: "Clock" },
+  { key: "detecting", label: "Detecting", icon: "Search" },
+  { key: "discovering", label: "Discovering", icon: "Globe" },
+  { key: "extracting", label: "Extracting", icon: "Download" },
+  { key: "verifying", label: "Verifying", icon: "ShieldCheck" },
+  { key: "normalizing", label: "Normalizing", icon: "Layers" },
+  { key: "completed", label: "Completed", icon: "CheckCircle" },
 ] as const;
 
 export const STATUS_COLORS: Record<string, string> = {
@@ -13,6 +13,7 @@ export const STATUS_COLORS: Record<string, string> = {
   detecting: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
   discovering: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
   extracting: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
+  verifying: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300",
   normalizing: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
   ingesting: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300",
   completed: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",

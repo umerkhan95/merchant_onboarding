@@ -506,3 +506,53 @@ class TestSchemaOrgExtractor:
         assert "Mozilla" in request.headers["User-Agent"]
         assert "Accept-Language" in request.headers
         assert "en-US" in request.headers["Accept-Language"]
+
+    def test_pii_fields_stripped_from_products(self, extractor):
+        """PII fields (review, author, aggregateRating) should be stripped."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "Product",
+                "name": "Test Product",
+                "sku": "SKU-PII",
+                "offers": {
+                    "@type": "Offer",
+                    "price": "19.99",
+                    "priceCurrency": "USD"
+                },
+                "review": {
+                    "@type": "Review",
+                    "author": {"@type": "Person", "name": "John Doe"},
+                    "reviewBody": "Great product!"
+                },
+                "author": {"@type": "Person", "name": "Jane Doe"},
+                "aggregateRating": {
+                    "@type": "AggregateRating",
+                    "ratingValue": "4.5",
+                    "reviewCount": "100"
+                },
+                "comment": [{"text": "Nice!"}],
+                "interactionStatistic": {"userInteractionCount": 500}
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/pii")
+
+        assert len(products) == 1
+        product = products[0]
+        assert product["name"] == "Test Product"
+        assert product["sku"] == "SKU-PII"
+        assert product["offers"]["price"] == "19.99"
+        assert "review" not in product
+        assert "author" not in product
+        assert "aggregateRating" not in product
+        assert "comment" not in product
+        assert "interactionStatistic" not in product

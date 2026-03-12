@@ -18,6 +18,14 @@ from app.extractors.browser_config import (
 
 logger = logging.getLogger(__name__)
 
+# Fields that may contain PII (reviewer names, personal data)
+_SCHEMA_ORG_PII_FIELDS = frozenset({
+    "review", "reviews", "author", "aggregateRating",
+    "creator", "contributor", "editor", "publisher",
+    "reviewedBy", "commentCount", "comment",
+    "interactionStatistic",
+})
+
 
 class SchemaOrgExtractor(BaseExtractor):
     """Extract JSON-LD structured data from <script type='application/ld+json'> tags."""
@@ -33,6 +41,11 @@ class SchemaOrgExtractor(BaseExtractor):
         if isinstance(type_value, list):
             return any("Product" in str(t) for t in type_value)
         return False
+
+    @staticmethod
+    def _strip_pii_fields(product: dict) -> dict:
+        """Remove fields that may contain PII from a Schema.org product dict."""
+        return {k: v for k, v in product.items() if k not in _SCHEMA_ORG_PII_FIELDS}
 
     @staticmethod
     def _extract_og_meta(soup: BeautifulSoup) -> dict[str, str]:
@@ -127,6 +140,9 @@ class SchemaOrgExtractor(BaseExtractor):
             if not products:
                 logger.debug("No Product objects found in JSON-LD on %s", url)
                 return products
+
+            # Strip PII fields before returning
+            products = [SchemaOrgExtractor._strip_pii_fields(p) for p in products]
 
             # Enrich sparse JSON-LD with OG meta tags from the same page
             og_data = SchemaOrgExtractor._extract_og_meta(soup)

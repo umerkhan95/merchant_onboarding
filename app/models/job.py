@@ -14,6 +14,7 @@ class OnboardingRequest(BaseModel):
     """Onboarding job creation request."""
 
     url: HttpUrl = Field(..., description="Store URL to onboard")
+    max_urls: int | None = Field(None, description="Cap discovered URLs (for testing)", ge=1)
 
     @field_validator("url")
     @classmethod

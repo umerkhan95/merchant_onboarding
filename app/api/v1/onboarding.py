@@ -33,6 +33,7 @@ async def _run_pipeline_direct(
     shop_url: str,
     redis_client: redis.asyncio.Redis,
     db: DatabaseClient | None,
+    max_urls: int | None = None,
 ) -> None:
     """Run the pipeline directly (no Celery) as an async background task."""
     from app.config import settings
@@ -72,7 +73,7 @@ async def _run_pipeline_direct(
     )
 
     try:
-        await pipeline.run(job_id=job_id, shop_url=shop_url)
+        await pipeline.run(job_id=job_id, shop_url=shop_url, max_urls=max_urls)
     except Exception:
         logger.exception("Direct pipeline failed for job %s", job_id)
 
@@ -111,14 +112,14 @@ async def create_onboarding_job(
     try:
         from app.workers.tasks import run_onboarding_pipeline
 
-        run_onboarding_pipeline.delay(job_id=job_id, url=str(body.url))
+        run_onboarding_pipeline.delay(job_id=job_id, shop_url=str(body.url), max_urls=body.max_urls)
         dispatched = True
         logger.info("Job %s dispatched to Celery", job_id)
     except Exception:
         logger.info("Celery unavailable, running pipeline directly for job %s", job_id)
 
     if not dispatched:
-        asyncio.create_task(_run_pipeline_direct(job_id, str(body.url), redis, db))
+        asyncio.create_task(_run_pipeline_direct(job_id, str(body.url), redis, db, max_urls=body.max_urls))
 
     return OnboardingResponse(
         job_id=job_id,

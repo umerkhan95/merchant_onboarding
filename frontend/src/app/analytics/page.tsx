@@ -2,13 +2,14 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { apiFetch } from "@/lib/api";
-import type { AnalyticsSummary, PerfStats, CrawlerStats } from "@/lib/types";
+import type { AnalyticsSummary, PerfStats, CrawlerStats, MerchantProfile } from "@/lib/types";
 import { StatCards } from "@/components/analytics/stat-cards";
 import { TierDonut } from "@/components/analytics/tier-donut";
 import { PlatformBar } from "@/components/analytics/platform-bar";
 import { StatusPie } from "@/components/analytics/status-pie";
 import { PerfDashboard } from "@/components/analytics/perf-dashboard";
 import { CrawlerPerf } from "@/components/analytics/crawler-perf";
+import { StoresOverview } from "@/components/analytics/stores-overview";
 
 function LoadingSkeleton() {
   return (
@@ -41,6 +42,7 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<AnalyticsSummary | null>(null);
   const [perfData, setPerfData] = useState<PerfStats | null>(null);
   const [crawlerData, setCrawlerData] = useState<CrawlerStats | null>(null);
+  const [storesData, setStoresData] = useState<MerchantProfile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchAll = useCallback(() => {
@@ -52,6 +54,9 @@ export default function AnalyticsPage() {
       .catch(() => {});
     apiFetch<CrawlerStats>("/api/v1/crawler-stats")
       .then(setCrawlerData)
+      .catch(() => {});
+    apiFetch<MerchantProfile[]>("/api/v1/merchants/profiles")
+      .then(setStoresData)
       .catch(() => {});
   }, []);
 
@@ -110,6 +115,8 @@ export default function AnalyticsPage() {
           <StatusPie data={data.jobs_by_status} />
         </div>
       </div>
+
+      <StoresOverview stores={storesData} />
 
       <CrawlerPerf data={crawlerData} />
 

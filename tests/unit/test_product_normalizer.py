@@ -75,7 +75,7 @@ class TestShopifyNormalization:
         assert product.in_stock is True
         assert len(product.variants) == 2
         assert product.tags == ["cotton", "premium", "bestseller"]
-        assert product.raw_data == raw
+        assert product.raw_data == {}
         assert product.idempotency_key != ""
 
     def test_normalize_shopify_variants(self, normalizer):
@@ -1329,3 +1329,53 @@ class TestAdditionalPropertyParsing:
         assert product is not None
         assert product.external_id == "DIRECT-SKU"
         assert product.sku == "DIRECT-SKU"
+
+
+class TestRawDataStorageConfig:
+    """Test store_raw_data config controls raw_data field."""
+
+    def test_raw_data_empty_when_store_raw_data_false(self, normalizer, monkeypatch):
+        """raw_data should be empty dict when store_raw_data=False."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "store_raw_data", False)
+
+        raw = {
+            "id": 123,
+            "title": "Test Product",
+            "handle": "test",
+            "variants": [{"price": "9.99"}],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.raw_data == {}
+
+    def test_raw_data_populated_when_store_raw_data_true(self, normalizer, monkeypatch):
+        """raw_data should contain original data when store_raw_data=True."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "store_raw_data", True)
+
+        raw = {
+            "id": 123,
+            "title": "Test Product",
+            "handle": "test",
+            "variants": [{"price": "9.99"}],
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test",
+            platform=Platform.SHOPIFY,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.raw_data == raw

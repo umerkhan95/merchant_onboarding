@@ -6,6 +6,7 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
+from app.config import settings
 from app.models.enums import Platform
 from app.models.product import Product, Variant
 from app.security.html_sanitizer import HTMLSanitizer
@@ -54,7 +55,7 @@ class ProductNormalizer:
         # Add common fields
         normalized_data["shop_id"] = shop_id
         normalized_data["platform"] = platform
-        normalized_data["raw_data"] = raw
+        normalized_data["raw_data"] = raw if settings.store_raw_data else {}
 
         # Validate and create Product
         try:

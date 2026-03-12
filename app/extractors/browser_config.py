@@ -174,6 +174,7 @@ def get_crawl_config(
     scan_full_page: bool = True,
     remove_overlay_elements: bool = True,
     scroll_delay: float = 0.5,
+    check_robots_txt: bool = True,
 ) -> CrawlerRunConfig:
     """Create a CrawlerRunConfig with anti-bot settings for the requested tier.
 
@@ -192,6 +193,7 @@ def get_crawl_config(
         scan_full_page: Scroll the full page to trigger lazy-loaded content.
         remove_overlay_elements: Remove cookie banners, modals, overlays.
         scroll_delay: Delay in seconds between scroll steps.
+        check_robots_txt: Whether to respect robots.txt directives.
 
     Returns:
         Configured CrawlerRunConfig.
@@ -221,6 +223,7 @@ def get_crawl_config(
         scan_full_page=scan_full_page,
         remove_overlay_elements=remove_overlay_elements,
         scroll_delay=scroll_delay,
+        check_robots_txt=check_robots_txt,
         locale="en-US",
     )
 

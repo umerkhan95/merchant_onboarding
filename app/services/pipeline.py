@@ -119,8 +119,8 @@ class Pipeline:
         recent = []
         for p in all_products[-5:]:
             recent.append({
-                "title": p.get("title") or p.get("name", ""),
-                "price": p.get("price") or p.get("og:price:amount", ""),
+                "title": p.get("title") or p.get("name") or p.get("og:title", ""),
+                "price": p.get("price") or p.get("og:price:amount") or p.get("product:price:amount", ""),
                 "image_url": p.get("image_url") or p.get("image") or p.get("og:image", ""),
             })
 
@@ -140,7 +140,8 @@ class Pipeline:
         )
 
     async def run(
-        self, job_id: str, shop_url: str, timeout: int = _PIPELINE_TIMEOUT_SECONDS
+        self, job_id: str, shop_url: str, timeout: int = _PIPELINE_TIMEOUT_SECONDS,
+        max_urls: int | None = None,
     ) -> dict:
         """Run the full pipeline: detect -> discover -> extract -> normalize -> ingest.
 
@@ -148,13 +149,14 @@ class Pipeline:
             job_id: Unique job identifier for progress tracking
             shop_url: Merchant shop URL to onboard
             timeout: Max seconds before the pipeline is killed (default 30 min)
+            max_urls: Cap discovered URLs to this number (None = no cap)
 
         Returns:
             Summary dict with platform, counts, and extraction tier
         """
         try:
             return await asyncio.wait_for(
-                self._run_inner(job_id, shop_url), timeout=timeout
+                self._run_inner(job_id, shop_url, max_urls=max_urls), timeout=timeout
             )
         except asyncio.TimeoutError:
             logger.error("Pipeline timed out after %ds for job %s", timeout, job_id)
@@ -179,7 +181,7 @@ class Pipeline:
             headers={**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()},
         )
 
-    async def _run_inner(self, job_id: str, shop_url: str) -> dict:
+    async def _run_inner(self, job_id: str, shop_url: str, max_urls: int | None = None) -> dict:
         """Inner pipeline logic wrapped by run() with timeout."""
         shop_url = normalize_shop_url(shop_url)
         logger.info(f"Starting pipeline for job {job_id}, shop URL: {shop_url}")
@@ -214,6 +216,7 @@ class Pipeline:
             await self.progress.set_metadata(job_id, platform=platform.value)
 
             # Step 1b: Extract merchant profile (non-blocking)
+            merchant_profile = None
             try:
                 profile_extractor = MerchantProfileExtractor(client=self._http_client)
                 profile_result = await profile_extractor.extract(
@@ -222,18 +225,18 @@ class Pipeline:
                 )
 
                 if profile_result.raw_data and not profile_result.error:
-                    profile = self.profile_normalizer.normalize(
+                    merchant_profile = self.profile_normalizer.normalize(
                         raw=profile_result.raw_data,
                         shop_id=shop_url,
                         platform=platform,
                         shop_url=shop_url,
                     )
-                    if profile and self.profile_ingestor:
-                        await self.profile_ingestor.upsert(profile)
+                    if merchant_profile and self.profile_ingestor:
+                        await self.profile_ingestor.upsert(merchant_profile)
                         logger.info(
                             "Merchant profile saved (confidence: %.2f, tags: %d)",
-                            profile.extraction_confidence,
-                            len(profile.analytics_tags),
+                            merchant_profile.extraction_confidence,
+                            len(merchant_profile.analytics_tags),
                         )
                     await self.progress.set_metadata(
                         job_id,
@@ -253,6 +256,9 @@ class Pipeline:
             )
 
             urls = await self.discovery.discover(shop_url, platform)
+            if max_urls and len(urls) > max_urls:
+                logger.info(f"Capping discovered URLs from {len(urls)} to {max_urls}")
+                urls = urls[:max_urls]
             logger.info(f"Discovered {len(urls)} URLs for extraction")
 
             if not urls:
@@ -347,6 +353,7 @@ class Pipeline:
             # and ingestion to avoid holding all normalized products in memory.
             total_normalized = 0
             total_ingested = 0
+            product_currency = None  # Track currency from products for profile backfill
 
             await self.progress.update(
                 job_id=job_id,
@@ -371,6 +378,10 @@ class Pipeline:
                     )
                     if product:
                         normalized_batch.append(product)
+
+                # Capture currency from first normalized product for profile backfill
+                if product_currency is None and normalized_batch:
+                    product_currency = normalized_batch[0].currency
 
                 total_normalized += len(normalized_batch)
 
@@ -406,6 +417,22 @@ class Pipeline:
 
             if total_ingested:
                 logger.info(f"Ingested {total_ingested} products to database")
+
+            # Backfill merchant profile currency from product data
+            if (
+                merchant_profile
+                and not merchant_profile.currency
+                and product_currency
+                and self.profile_ingestor
+            ):
+                merchant_profile.currency = product_currency
+                try:
+                    await self.profile_ingestor.upsert(merchant_profile)
+                    logger.info(
+                        "Backfilled merchant profile currency: %s", product_currency
+                    )
+                except Exception as e:
+                    logger.warning("Failed to backfill profile currency: %s", e)
 
             # Reconciliation report (uses tracker audit counts, not product list)
             audit = extraction_result.audit

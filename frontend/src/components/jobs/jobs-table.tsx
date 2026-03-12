@@ -67,7 +67,16 @@ export function JobsTable({ jobs }: JobsTableProps) {
             >
               <td className="px-4 py-3 font-mono text-xs">{job.job_id}</td>
               <td className="max-w-[200px] truncate px-4 py-3">
-                {job.shop_url || "-"}
+                {job.shop_url ? (
+                  <Link
+                    href={`/stores/${encodeURIComponent(job.shop_url)}`}
+                    className="text-[hsl(var(--primary))] hover:underline"
+                  >
+                    {job.shop_url}
+                  </Link>
+                ) : (
+                  "-"
+                )}
               </td>
               <td className="px-4 py-3 capitalize">{job.platform || "-"}</td>
               <td className="px-4 py-3">

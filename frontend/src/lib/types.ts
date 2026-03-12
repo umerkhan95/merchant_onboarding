@@ -1,3 +1,17 @@
+export interface RecentProduct {
+  title: string;
+  price: string | number;
+  image_url: string;
+}
+
+export interface ExtractionAudit {
+  urls_success: number;
+  urls_empty: number;
+  urls_error: number;
+  urls_not_product: number;
+  total_products: number;
+}
+
 export interface JobProgress {
   job_id: string;
   processed: number;
@@ -12,6 +26,9 @@ export interface JobProgress {
   products_count?: number;
   started_at?: string;
   completed_at?: string;
+  recent_products?: RecentProduct[] | null;
+  extraction_audit?: ExtractionAudit | null;
+  coverage_percentage?: number | null;
 }
 
 export interface JobSummary {
@@ -102,6 +119,51 @@ export interface ProductListResponse {
   data: Product[];
   pagination: PaginationMeta;
   shop_id: string;
+}
+
+export interface ContactInfo {
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+}
+
+export interface SocialLinks {
+  facebook: string | null;
+  instagram: string | null;
+  twitter: string | null;
+  youtube: string | null;
+  tiktok: string | null;
+  pinterest: string | null;
+  linkedin: string | null;
+}
+
+export interface AnalyticsTag {
+  provider: string;
+  tag_id: string;
+}
+
+export interface MerchantProfile {
+  id: number;
+  shop_id: string;
+  platform: string;
+  shop_url: string;
+  company_name: string | null;
+  logo_url: string | null;
+  description: string | null;
+  about_text: string | null;
+  founding_year: number | null;
+  industry: string | null;
+  language: string | null;
+  currency: string | null;
+  contact: ContactInfo;
+  social_links: SocialLinks;
+  analytics_tags: AnalyticsTag[];
+  favicon_url: string | null;
+  pages_crawled: string[];
+  extraction_confidence: number;
+  scraped_at: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface EndpointPerf {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import redis.asyncio as redis
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3, retry_backoff=True)
-def run_onboarding_pipeline(self, job_id: str, shop_url: str) -> dict:
+def run_onboarding_pipeline(self, job_id: str, shop_url: str, max_urls: int | None = None) -> dict:
     """Celery task that runs the async pipeline.
 
     Args:
@@ -43,18 +44,40 @@ def run_onboarding_pipeline(self, job_id: str, shop_url: str) -> dict:
     asyncio.set_event_loop(loop)
 
     try:
-        result = loop.run_until_complete(_run_pipeline(job_id, shop_url))
+        result = loop.run_until_complete(_run_pipeline(job_id, shop_url, max_urls=max_urls))
         logger.info(f"Onboarding task completed for job {job_id}: {result}")
         return result
     except Exception as exc:
         logger.exception(f"Onboarding task failed for job {job_id}: {exc}")
+        # Write to DLQ when all retries are exhausted
+        if self.request.retries >= self.max_retries:
+            loop.run_until_complete(
+                _write_to_dlq(shop_url, str(exc))
+            )
         # Retry with exponential backoff
         raise self.retry(exc=exc) from None
     finally:
         loop.close()
 
 
-async def _run_pipeline(job_id: str, shop_url: str) -> dict:
+async def _write_to_dlq(url: str, error: str) -> None:
+    """Write a failed job to the dead letter queue with TTL."""
+    import uuid
+
+    redis_client = redis.from_url(settings.redis_url, decode_responses=False)
+    try:
+        dlq_key = "dlq:jobs"
+        job_id = str(uuid.uuid4())
+        entry = json.dumps({"url": url, "error": error})
+        await redis_client.hset(dlq_key, job_id, entry)
+        await redis_client.expire(dlq_key, settings.dlq_ttl_seconds)
+    except Exception as e:
+        logger.warning("Failed to write DLQ entry: %s", e)
+    finally:
+        await redis_client.aclose()
+
+
+async def _run_pipeline(job_id: str, shop_url: str, max_urls: int | None = None) -> dict:
     """Run the async pipeline with all infrastructure components.
 
     Args:
@@ -130,7 +153,7 @@ async def _run_pipeline(job_id: str, shop_url: str) -> dict:
         )
 
         # Run pipeline
-        result = await pipeline.run(job_id, shop_url)
+        result = await pipeline.run(job_id, shop_url, max_urls=max_urls)
 
         return result
 
