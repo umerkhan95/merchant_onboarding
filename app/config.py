@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     circuit_breaker_threshold: int = 5
     circuit_breaker_timeout: int = 60
 
+    # GDPR
+    data_retention_days: int = 365
+    store_raw_data: bool = False
+    respect_robots_txt: bool = True
+    dlq_ttl_seconds: int = 2592000  # 30 days
+
     # LLM Extraction
     llm_provider: str = "openai/gpt-4o-mini"
     llm_api_key: str = ""

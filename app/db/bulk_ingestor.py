@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+from app.config import settings
 from app.db.queries import (
+    ALTER_PRODUCTS_ADD_RETENTION,
+    ALTER_PROFILES_ADD_RETENTION,
     COUNT_INVALID_PRODUCTS,
     CREATE_STAGING_TABLE,
+    DELETE_EXPIRED_PRODUCTS,
+    DELETE_EXPIRED_PROFILES,
     DELETE_INVALID_PRODUCTS,
+    DELETE_MERCHANT_PROFILE,
+    DELETE_PRODUCTS_BY_SHOP,
+    SET_DEFAULT_RETENTION_PRODUCTS,
+    SET_DEFAULT_RETENTION_PROFILES,
     UPSERT_FROM_STAGING,
 )
 
@@ -85,6 +95,9 @@ class BulkIngestor:
                 await conn.execute(CREATE_STAGING_TABLE)
 
                 # Prepare batch data
+                retention_expires = datetime.now(timezone.utc) + timedelta(
+                    days=settings.data_retention_days,
+                )
                 staging_data = [
                     (
                         p.external_id,
@@ -111,6 +124,7 @@ class BulkIngestor:
                         json.dumps(p.raw_data),
                         p.scraped_at,
                         p.idempotency_key,
+                        retention_expires,
                     )
                     for p in products
                 ]
@@ -125,6 +139,7 @@ class BulkIngestor:
                         "product_url", "sku", "gtin", "mpn", "vendor", "product_type",
                         "in_stock", "condition", "variants", "tags", "additional_images",
                         "category_path", "raw_data", "scraped_at", "idempotency_key",
+                        "retention_expires_at",
                     ],
                 )
 
@@ -148,6 +163,34 @@ class BulkIngestor:
         async with self.db.pool.acquire() as conn:
             return await conn.fetchval(COUNT_INVALID_PRODUCTS)
 
+    async def delete_merchant_data(self, shop_id: str) -> dict[str, int]:
+        """Delete all data for a merchant (GDPR right to erasure).
+
+        Args:
+            shop_id: The merchant's shop identifier
+
+        Returns:
+            Dict with counts of deleted records per table
+        """
+        async with self.db.pool.acquire() as conn:
+            # Delete products
+            result = await conn.execute(DELETE_PRODUCTS_BY_SHOP, shop_id)
+            deleted_products = int(result.split()[-1]) if result else 0
+
+            # Delete merchant profile
+            result = await conn.execute(DELETE_MERCHANT_PROFILE, shop_id)
+            deleted_profiles = int(result.split()[-1]) if result else 0
+
+            logger.info(
+                "GDPR erasure for %s: %d products, %d profiles deleted",
+                shop_id, deleted_products, deleted_profiles,
+            )
+
+            return {
+                "products_deleted": deleted_products,
+                "profiles_deleted": deleted_profiles,
+            }
+
     async def cleanup_invalid_products(self) -> int:
         """Remove invalid products from the database.
 
@@ -163,3 +206,39 @@ class BulkIngestor:
             deleted = int(result.split()[-1]) if result else 0
             logger.info("Cleaned up %d invalid products from database", deleted)
             return deleted
+
+    async def cleanup_expired_data(self) -> dict[str, int]:
+        """Delete records past their retention date (GDPR storage limitation).
+
+        Returns:
+            Dict with counts of deleted records per table
+        """
+        async with self.db.pool.acquire() as conn:
+            result_products = await conn.execute(DELETE_EXPIRED_PRODUCTS)
+            deleted_products = int(result_products.split()[-1]) if result_products else 0
+
+            result_profiles = await conn.execute(DELETE_EXPIRED_PROFILES)
+            deleted_profiles = int(result_profiles.split()[-1]) if result_profiles else 0
+
+            logger.info(
+                "Retention cleanup: %d expired products, %d expired profiles deleted",
+                deleted_products, deleted_profiles,
+            )
+
+            return {
+                "products_deleted": deleted_products,
+                "profiles_deleted": deleted_profiles,
+            }
+
+    async def apply_retention_migration(self, retention_days: int) -> None:
+        """Add retention columns and set defaults for existing records.
+
+        Args:
+            retention_days: Number of days from creation to retain data
+        """
+        async with self.db.pool.acquire() as conn:
+            await conn.execute(ALTER_PRODUCTS_ADD_RETENTION)
+            await conn.execute(ALTER_PROFILES_ADD_RETENTION)
+            await conn.execute(SET_DEFAULT_RETENTION_PRODUCTS, str(retention_days))
+            await conn.execute(SET_DEFAULT_RETENTION_PROFILES, str(retention_days))
+            logger.info("Applied retention policy: %d days for existing records", retention_days)

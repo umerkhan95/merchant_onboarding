@@ -81,6 +81,15 @@ class MockRedis:
         """Mock expire."""
         return True
 
+    async def scan(self, cursor: int = 0, match: str | None = None, count: int = 100) -> tuple[int, list[str]]:
+        """Mock scan."""
+        keys = []
+        if match and match.startswith("progress:"):
+            for k in list(self._data.keys()):
+                if k.startswith("hash:progress:"):
+                    keys.append(k.removeprefix("hash:"))
+        return 0, keys
+
     async def delete(self, *keys: str) -> int:
         """Mock delete."""
         count = 0

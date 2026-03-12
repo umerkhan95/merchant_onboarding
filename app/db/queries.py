@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS products (
     idempotency_key TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retention_expires_at TIMESTAMPTZ,
     UNIQUE(idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_products_shop_id ON products(shop_id);
@@ -51,13 +52,13 @@ INSERT INTO products (
     external_id, shop_id, platform, title, description, price, compare_at_price,
     currency, image_url, product_url, sku, gtin, mpn, vendor, product_type, in_stock,
     condition, variants, tags, additional_images, category_path,
-    raw_data, scraped_at, idempotency_key
+    raw_data, scraped_at, idempotency_key, retention_expires_at
 )
 SELECT
     external_id, shop_id, platform, title, description, price, compare_at_price,
     currency, image_url, product_url, sku, gtin, mpn, vendor, product_type, in_stock,
     condition, variants, tags, additional_images, category_path,
-    raw_data, scraped_at, idempotency_key
+    raw_data, scraped_at, idempotency_key, retention_expires_at
 FROM staging_products
 ON CONFLICT (idempotency_key)
 DO UPDATE SET
@@ -165,7 +166,8 @@ CREATE TABLE IF NOT EXISTS merchant_profiles (
 
     scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retention_expires_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_merchant_profiles_shop_id
@@ -209,6 +211,67 @@ SELECT * FROM merchant_profiles WHERE shop_id = $1;
 
 SELECT_ALL_MERCHANT_PROFILES = """
 SELECT * FROM merchant_profiles ORDER BY updated_at DESC;
+"""
+
+# GDPR: Delete all products for a merchant
+DELETE_PRODUCTS_BY_SHOP = """
+DELETE FROM products WHERE shop_id = $1;
+"""
+
+COUNT_PRODUCTS_BY_SHOP_FOR_DELETE = """
+SELECT COUNT(*) FROM products WHERE shop_id = $1;
+"""
+
+# GDPR: Delete merchant profile
+DELETE_MERCHANT_PROFILE = """
+DELETE FROM merchant_profiles WHERE shop_id = $1;
+"""
+
+# GDPR: Data retention — add retention column
+ALTER_PRODUCTS_ADD_RETENTION = """
+ALTER TABLE products ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ;
+"""
+
+ALTER_PROFILES_ADD_RETENTION = """
+ALTER TABLE merchant_profiles ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ;
+"""
+
+# GDPR: Delete expired records
+DELETE_EXPIRED_PRODUCTS = """
+DELETE FROM products
+WHERE retention_expires_at IS NOT NULL
+  AND retention_expires_at < NOW();
+"""
+
+DELETE_EXPIRED_PROFILES = """
+DELETE FROM merchant_profiles
+WHERE retention_expires_at IS NOT NULL
+  AND retention_expires_at < NOW();
+"""
+
+COUNT_EXPIRED_PRODUCTS = """
+SELECT COUNT(*) FROM products
+WHERE retention_expires_at IS NOT NULL
+  AND retention_expires_at < NOW();
+"""
+
+COUNT_EXPIRED_PROFILES = """
+SELECT COUNT(*) FROM merchant_profiles
+WHERE retention_expires_at IS NOT NULL
+  AND retention_expires_at < NOW();
+"""
+
+# Set retention on existing records that don't have one
+SET_DEFAULT_RETENTION_PRODUCTS = """
+UPDATE products
+SET retention_expires_at = created_at + ($1 || ' days')::INTERVAL
+WHERE retention_expires_at IS NULL;
+"""
+
+SET_DEFAULT_RETENTION_PROFILES = """
+UPDATE merchant_profiles
+SET retention_expires_at = created_at + ($1 || ' days')::INTERVAL
+WHERE retention_expires_at IS NULL;
 """
 
 # Migration: add idealo-required columns to existing products table

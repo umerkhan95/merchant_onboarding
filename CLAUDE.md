@@ -423,6 +423,12 @@ merchant_onboarding/
    SmartCSSExtractor or LLMExtractor. These tiers require `LLM_API_KEY` env var and
    explicit wiring in the task runner.
 
+## Testing Rules
+
+- **Crawl limit for testing**: Only crawl 10-20 product URLs max during testing. Never more.
+  This prevents traffic spikes on target stores and avoids anti-bot blocks.
+- Use `max_urls=10` when calling the pipeline for test runs.
+
 ## Development Rules
 
 - `async/await` everywhere -- crawl4ai, asyncpg, Redis are all async
