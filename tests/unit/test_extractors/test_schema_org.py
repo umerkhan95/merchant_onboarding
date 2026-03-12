@@ -507,6 +507,196 @@ class TestSchemaOrgExtractor:
         assert "Accept-Language" in request.headers
         assert "en-US" in request.headers["Accept-Language"]
 
+    def test_product_group_pulls_variant_price(self, extractor):
+        """ProductGroup with hasVariant should get first variant's offers."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "ProductGroup",
+                "name": "Size Rug",
+                "hasVariant": [
+                    {
+                        "@type": "Product",
+                        "name": "Size Rug - 5x8",
+                        "offers": {"@type": "Offer", "price": "299.00", "priceCurrency": "USD"}
+                    },
+                    {
+                        "@type": "Product",
+                        "name": "Size Rug - 8x10",
+                        "offers": {"@type": "Offer", "price": "499.00", "priceCurrency": "USD"}
+                    }
+                ]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/rug")
+        assert len(products) == 1
+        assert products[0]["offers"]["price"] == "299.00"
+
+    def test_product_group_skips_zero_price_variants(self, extractor):
+        """ProductGroup should skip $0 variants and use first non-zero price."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "ProductGroup",
+                "name": "Variable Product",
+                "hasVariant": [
+                    {
+                        "@type": "Product",
+                        "name": "Variant A",
+                        "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+                    },
+                    {
+                        "@type": "Product",
+                        "name": "Variant B",
+                        "offers": {"@type": "Offer", "price": "0.00", "priceCurrency": "USD"}
+                    },
+                    {
+                        "@type": "Product",
+                        "name": "Variant C",
+                        "offers": {"@type": "Offer", "price": "149.99", "priceCurrency": "USD"}
+                    }
+                ]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/var")
+        assert len(products) == 1
+        assert products[0]["offers"]["price"] == "149.99"
+
+    def test_product_group_with_existing_price_not_overwritten(self, extractor):
+        """ProductGroup with its own non-zero price should not be overwritten."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "ProductGroup",
+                "name": "Priced Group",
+                "offers": {"@type": "Offer", "price": "59.99", "priceCurrency": "USD"},
+                "hasVariant": [
+                    {
+                        "@type": "Product",
+                        "offers": {"@type": "Offer", "price": "99.99", "priceCurrency": "USD"}
+                    }
+                ]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/priced")
+        assert len(products) == 1
+        assert products[0]["offers"]["price"] == "59.99"
+
+    def test_product_group_all_zero_price_variants(self, extractor):
+        """ProductGroup where all variants have $0 should not get offers set."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "ProductGroup",
+                "name": "All Zero",
+                "hasVariant": [
+                    {"@type": "Product", "offers": {"@type": "Offer", "price": "0"}},
+                    {"@type": "Product", "offers": {"@type": "Offer", "price": "0.00"}}
+                ]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/zero")
+        assert len(products) == 1
+        # offers should remain None/absent since no non-zero variant found
+        offers = products[0].get("offers")
+        if offers:
+            try:
+                assert float(offers.get("price", 0)) == 0
+            except (ValueError, TypeError):
+                pass
+
+    def test_product_group_variant_with_offer_list(self, extractor):
+        """ProductGroup variant with offers as a list should extract non-zero price."""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "ProductGroup",
+                "name": "Multi-Offer Variant",
+                "hasVariant": [
+                    {
+                        "@type": "Product",
+                        "offers": [
+                            {"@type": "Offer", "price": "0"},
+                            {"@type": "Offer", "price": "79.99", "priceCurrency": "EUR"}
+                        ]
+                    }
+                ]
+            }
+            </script>
+        </head>
+        <body></body>
+        </html>
+        """
+        products = SchemaOrgExtractor.extract_from_html(html, "https://example.com/multi")
+        assert len(products) == 1
+        offers = products[0].get("offers")
+        assert offers is not None
+        # Should pick the non-zero offer from the list
+        if isinstance(offers, list):
+            assert any(o.get("price") == "79.99" for o in offers)
+        else:
+            assert offers.get("price") == "79.99"
+
+    def test_has_nonzero_price_dict(self):
+        """_has_nonzero_price with a dict offer."""
+        assert SchemaOrgExtractor._has_nonzero_price({"price": "29.99"}) is True
+        assert SchemaOrgExtractor._has_nonzero_price({"price": "0"}) is False
+        assert SchemaOrgExtractor._has_nonzero_price({"price": "0.00"}) is False
+        assert SchemaOrgExtractor._has_nonzero_price({}) is False
+        assert SchemaOrgExtractor._has_nonzero_price(None) is False
+
+    def test_has_nonzero_price_list(self):
+        """_has_nonzero_price with a list of offers."""
+        assert SchemaOrgExtractor._has_nonzero_price([
+            {"price": "0"}, {"price": "49.99"}
+        ]) is True
+        assert SchemaOrgExtractor._has_nonzero_price([
+            {"price": "0"}, {"price": "0.00"}
+        ]) is False
+        assert SchemaOrgExtractor._has_nonzero_price([]) is False
+
+    def test_has_nonzero_price_non_numeric(self):
+        """_has_nonzero_price with non-numeric price strings."""
+        # "Contact for price" is truthy but not numeric — should return True (bool fallback)
+        assert SchemaOrgExtractor._has_nonzero_price({"price": "Contact us"}) is True
+        assert SchemaOrgExtractor._has_nonzero_price({"price": ""}) is False
+
     def test_pii_fields_stripped_from_products(self, extractor):
         """PII fields (review, author, aggregateRating) should be stripped."""
         html = """

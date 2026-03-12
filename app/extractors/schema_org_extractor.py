@@ -48,6 +48,72 @@ class SchemaOrgExtractor(BaseExtractor):
         return {k: v for k, v in product.items() if k not in _SCHEMA_ORG_PII_FIELDS}
 
     @staticmethod
+    def _has_nonzero_price(offers) -> bool:
+        """Check if offers contain a non-zero price."""
+        if isinstance(offers, dict):
+            try:
+                return float(offers.get("price", 0)) > 0
+            except (ValueError, TypeError):
+                return bool(offers.get("price"))
+        if isinstance(offers, list):
+            for offer in offers:
+                if isinstance(offer, dict):
+                    try:
+                        if float(offer.get("price", 0)) > 0:
+                            return True
+                    except (ValueError, TypeError):
+                        if offer.get("price"):
+                            return True
+        return False
+
+    @staticmethod
+    def _enrich_product_group(product: dict) -> None:
+        """Pull first variant's non-zero offers into a ProductGroup with no direct price.
+
+        Shopify uses ProductGroup + hasVariant for variable-priced products
+        (e.g. rugs with size options). The parent ProductGroup has no offers,
+        but each variant Product inside hasVariant does.
+
+        Skips variants with zero price (out-of-stock items) to avoid setting
+        a misleading $0 price on the parent.
+        """
+        # Already has a usable non-zero price — nothing to do
+        offers = product.get("offers")
+        if SchemaOrgExtractor._has_nonzero_price(offers):
+            return
+
+        variants = product.get("hasVariant", [])
+        if not isinstance(variants, list) or not variants:
+            return
+
+        # Find first variant with a non-zero price
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+            v_offers = variant.get("offers")
+            if isinstance(v_offers, dict):
+                try:
+                    if float(v_offers.get("price", 0)) > 0:
+                        product["offers"] = v_offers
+                        return
+                except (ValueError, TypeError):
+                    if v_offers.get("price"):
+                        product["offers"] = v_offers
+                        return
+            if isinstance(v_offers, list):
+                for offer in v_offers:
+                    if not isinstance(offer, dict):
+                        continue
+                    try:
+                        if float(offer.get("price", 0)) > 0:
+                            product["offers"] = [offer]
+                            return
+                    except (ValueError, TypeError):
+                        if offer.get("price"):
+                            product["offers"] = [offer]
+                            return
+
+    @staticmethod
     def _extract_og_meta(soup: BeautifulSoup) -> dict[str, str]:
         """Extract OpenGraph meta tags from page as a fallback data source.
 
@@ -141,6 +207,13 @@ class SchemaOrgExtractor(BaseExtractor):
                 logger.debug("No Product objects found in JSON-LD on %s", url)
                 return products
 
+            # Enrich ProductGroup: pull first variant's offers into parent
+            # when parent has no direct price (common Shopify pattern for
+            # variable-priced products like rugs with size options).
+            for product in products:
+                if product.get("@type") == "ProductGroup":
+                    SchemaOrgExtractor._enrich_product_group(product)
+
             # Strip PII fields before returning
             products = [SchemaOrgExtractor._strip_pii_fields(p) for p in products]
 
@@ -148,9 +221,9 @@ class SchemaOrgExtractor(BaseExtractor):
             og_data = SchemaOrgExtractor._extract_og_meta(soup)
             if og_data:
                 for product in products:
-                    # Fill missing image from og:image
+                    # Fill missing image from og:image (set canonical key)
                     if not product.get("image") and og_data.get("og:image"):
-                        product["og:image"] = og_data["og:image"]
+                        product["image"] = og_data["og:image"]
                     # Fill missing URL from og:url
                     if not product.get("url") and og_data.get("og:url"):
                         product["url"] = og_data["og:url"]

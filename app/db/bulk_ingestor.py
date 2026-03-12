@@ -77,6 +77,25 @@ class BulkIngestor:
         logger.info(f"Bulk ingest complete. Total products affected: {total_affected}")
         return total_affected
 
+    @staticmethod
+    def _deduplicate_by_key(products: list[Product]) -> list[Product]:
+        """Remove products with duplicate idempotency keys within a batch.
+
+        PostgreSQL ON CONFLICT DO UPDATE cannot handle two rows with the same
+        constrained value in a single command. Keeps the last occurrence (most
+        recently processed) when duplicates exist.
+        """
+        seen: dict[str, Product] = {}
+        for p in products:
+            seen[p.idempotency_key] = p
+        deduped = list(seen.values())
+        if len(deduped) < len(products):
+            logger.info(
+                "Deduplicated %d → %d products by idempotency_key before insert",
+                len(products), len(deduped),
+            )
+        return deduped
+
     async def _ingest_batch(self, products: list[Product]) -> int:
         """Ingest a single batch of products.
 
@@ -89,6 +108,10 @@ class BulkIngestor:
         Raises:
             RuntimeError: If database operation fails
         """
+        products = self._deduplicate_by_key(products)
+        if not products:
+            return 0
+
         async with self.db.pool.acquire() as conn, conn.transaction():
             try:
                 # Create staging table
