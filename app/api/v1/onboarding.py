@@ -50,6 +50,18 @@ async def _run_pipeline_direct(
     rate_limiter = RateLimiter()
     ingestor = BulkIngestor(db) if db is not None else None
 
+    # Initialize OAuth store if encryption key is configured
+    oauth_store = None
+    if settings.oauth_encryption_key and db is not None:
+        from app.db.oauth_store import OAuthStore
+        oauth_store = OAuthStore(db)
+
+    # Initialize merchant profile ingestor
+    profile_ingestor = None
+    if db is not None:
+        from app.db.merchant_profile_ingestor import MerchantProfileIngestor
+        profile_ingestor = MerchantProfileIngestor(db)
+
     # Initialize LLM-powered extractors (Tiers 4-5) if API key is configured
     smart_css_extractor = None
     llm_extractor = None
@@ -70,6 +82,8 @@ async def _run_pipeline_direct(
         bulk_ingestor=ingestor,
         smart_css_extractor=smart_css_extractor,
         llm_extractor=llm_extractor,
+        oauth_store=oauth_store,
+        profile_ingestor=profile_ingestor,
     )
 
     try:

@@ -94,7 +94,7 @@ async def test_tracked_extraction_tags_source_url(pipeline, mock_progress_tracke
     with (
         patch("app.services.pipeline.PlatformDetector.detect") as mock_detect,
         patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover,
-        patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+        patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_schema_class,
     ):
         mock_detect.return_value = _generic_detect()
         mock_discover.return_value = [
@@ -154,7 +154,7 @@ async def test_tracked_extraction_records_outcomes(pipeline, mock_progress_track
     with (
         patch("app.services.pipeline.PlatformDetector.detect") as mock_detect,
         patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover,
-        patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+        patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_schema_class,
     ):
         mock_detect.return_value = _generic_detect()
         mock_discover.return_value = [
@@ -196,7 +196,7 @@ async def test_tracked_extraction_records_errors(pipeline, mock_progress_tracker
     with (
         patch("app.services.pipeline.PlatformDetector.detect") as mock_detect,
         patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover,
-        patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+        patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_schema_class,
         patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
         patch("app.services.pipeline.CSSExtractor") as mock_css_class,
     ):
@@ -268,7 +268,7 @@ async def test_reextraction_capped_at_50_urls(pipeline, mock_progress_tracker):
     with (
         patch("app.services.pipeline.PlatformDetector.detect") as mock_detect,
         patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover,
-        patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+        patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_schema_class,
     ):
         mock_detect.return_value = _generic_detect()
         urls = [f"https://example.com/p{i}" for i in range(60)]
@@ -291,10 +291,10 @@ async def test_reextraction_capped_at_50_urls(pipeline, mock_progress_tracker):
             mock_og.extract = AsyncMock(return_value=ExtractorResult(products=[]))
             mock_og_class.return_value = mock_og
 
-            result = await pipeline.run("job-capped", "https://example.com")
+            result = await pipeline.run("job-capped", "https://example.com", max_urls=100)
 
             assert result["total_extracted"] == 60
-            # OG was never called: Schema.org passed probe, and cap prevented re-extraction
+            # OG was never called: UnifiedCrawl passed probe, and cap prevented re-extraction
             mock_og.extract.assert_not_called()
 
 
@@ -534,7 +534,7 @@ async def test_page_validator_records_not_product_on_empty(pipeline, mock_progre
     with (
         patch("app.services.pipeline.PlatformDetector.detect") as mock_detect,
         patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover,
-        patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+        patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_schema_class,
         patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
         patch("app.services.pipeline.CSSExtractor") as mock_css_class,
         patch.object(pipeline, "_fetch_html") as mock_fetch,
@@ -585,7 +585,7 @@ async def test_page_validator_records_empty_when_valid_product_page(pipeline, mo
     with (
         patch("app.services.pipeline.PlatformDetector.detect") as mock_detect,
         patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover,
-        patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+        patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_schema_class,
         patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
         patch("app.services.pipeline.CSSExtractor") as mock_css_class,
         patch.object(pipeline, "_fetch_html") as mock_fetch,
@@ -639,7 +639,7 @@ async def test_page_validator_skipped_when_fetch_fails(pipeline, mock_progress_t
     with (
         patch("app.services.pipeline.PlatformDetector.detect") as mock_detect,
         patch("app.services.pipeline.URLDiscoveryService.discover") as mock_discover,
-        patch("app.services.pipeline.SchemaOrgExtractor") as mock_schema_class,
+        patch("app.services.pipeline.UnifiedCrawlExtractor") as mock_schema_class,
         patch("app.services.pipeline.OpenGraphExtractor") as mock_og_class,
         patch("app.services.pipeline.CSSExtractor") as mock_css_class,
         patch.object(pipeline, "_fetch_html") as mock_fetch,

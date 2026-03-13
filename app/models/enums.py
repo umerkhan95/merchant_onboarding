@@ -41,4 +41,5 @@ class ExtractionTier(StrEnum):
     DEEP_CRAWL = "deep_crawl"
     SMART_CSS = "smart_css"
     BIGCOMMERCE_API = "bigcommerce_api"
+    SHOPIFY_ADMIN_API = "shopify_admin_api"
     LLM = "llm"

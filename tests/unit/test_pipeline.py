@@ -1484,7 +1484,7 @@ async def test_timeout_preserves_existing_progress_counts(pipeline, mock_progres
         return_value={"processed": 42, "total": 100}
     )
 
-    async def slow_inner(job_id, shop_url):
+    async def slow_inner(job_id, shop_url, max_urls=None):
         await asyncio.sleep(999)
 
     pipeline._run_inner = slow_inner
@@ -1511,7 +1511,7 @@ async def test_timeout_uses_zero_counts_when_no_prior_progress(pipeline, mock_pr
     """On timeout with no prior progress data (get returns None), defaults to 0."""
     mock_progress_tracker.get = AsyncMock(return_value=None)
 
-    async def slow_inner(job_id, shop_url):
+    async def slow_inner(job_id, shop_url, max_urls=None):
         await asyncio.sleep(999)
 
     pipeline._run_inner = slow_inner

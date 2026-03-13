@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     bigcommerce_client_secret: str = ""
     bigcommerce_callback_url: str = "http://localhost:8000/api/v1/auth/bigcommerce/callback"
     bigcommerce_account_uuid: str = ""
+    shopify_client_id: str = ""
+    shopify_client_secret: str = ""
+    shopify_callback_url: str = "http://localhost:8000/api/v1/auth/shopify/callback"
 
     # LLM Extraction
     llm_provider: str = "openai/gpt-4o-mini"

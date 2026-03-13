@@ -126,10 +126,33 @@ class Pipeline:
         # Last 5 products with display-safe fields
         recent = []
         for p in all_products[-5:]:
+            # Resolve image URL from various raw formats
+            image = p.get("image_url") or p.get("image") or p.get("og:image", "")
+            if not image or not isinstance(image, str):
+                # Shopify Admin API: images is a list of {src: "..."}
+                images = p.get("images") or []
+                if isinstance(images, list) and images:
+                    first = images[0]
+                    image = first.get("src", "") if isinstance(first, dict) else str(first)
+                # Shopify Admin API: image can be a dict with src
+                if not image:
+                    img_obj = p.get("image")
+                    if isinstance(img_obj, dict):
+                        image = img_obj.get("src", "")
+            # Resolve price from various raw formats
+            price = p.get("price") or p.get("og:price:amount") or p.get("product:price:amount", "")
+            if not price:
+                # Shopify/BigCommerce Admin API: price is on the first variant
+                variants = p.get("variants") or []
+                if isinstance(variants, list) and variants:
+                    first_v = variants[0]
+                    if isinstance(first_v, dict):
+                        price = first_v.get("price", "")
+
             recent.append({
                 "title": p.get("title") or p.get("name") or p.get("og:title", ""),
-                "price": p.get("price") or p.get("og:price:amount") or p.get("product:price:amount", ""),
-                "image_url": p.get("image_url") or p.get("image") or p.get("og:image", ""),
+                "price": price,
+                "image_url": image if isinstance(image, str) else "",
             })
 
         audit = tracker.build_audit()
@@ -271,23 +294,43 @@ class Pipeline:
             logger.info(f"Discovered {len(urls)} URLs for extraction")
 
             if not urls:
-                logger.warning(f"No URLs discovered for {shop_url}")
-                await self.progress.update(
-                    job_id=job_id,
-                    processed=0,
-                    total=0,
-                    status=JobStatus.NEEDS_REVIEW,
-                    current_step="No product URLs discovered -- needs manual review",
+                # Check if we have an OAuth connection that can fetch products
+                # without needing discovered URLs (Admin APIs).
+                has_admin_api = False
+                if self.oauth_store and platform in (Platform.SHOPIFY, Platform.BIGCOMMERCE):
+                    from urllib.parse import urlparse as _oauth_urlparse
+                    _oauth_domain = _oauth_urlparse(shop_url).netloc or shop_url
+                    _oauth_conn = await self.oauth_store.get_connection(
+                        platform.value, _oauth_domain
+                    )
+                    if not _oauth_conn:
+                        _oauth_conn = await self.oauth_store.get_connection_by_domain(
+                            _oauth_domain
+                        )
+                    has_admin_api = _oauth_conn is not None and _oauth_conn.access_token is not None
+
+                if not has_admin_api:
+                    logger.warning(f"No URLs discovered for {shop_url}")
+                    await self.progress.update(
+                        job_id=job_id,
+                        processed=0,
+                        total=0,
+                        status=JobStatus.NEEDS_REVIEW,
+                        current_step="No product URLs discovered -- needs manual review",
+                    )
+                    return {
+                        "platform": platform.value,
+                        "total_extracted": 0,
+                        "total_normalized": 0,
+                        "total_ingested": 0,
+                        "extraction_tier": ExtractionTier.API.value,
+                        "needs_review": True,
+                        "review_reason": "no_urls_discovered",
+                    }
+                logger.info(
+                    "No URLs discovered but OAuth Admin API available for %s -- proceeding",
+                    platform.value,
                 )
-                return {
-                    "platform": platform.value,
-                    "total_extracted": 0,
-                    "total_normalized": 0,
-                    "total_ingested": 0,
-                    "extraction_tier": ExtractionTier.API.value,
-                    "needs_review": True,
-                    "review_reason": "no_urls_discovered",
-                }
 
             # Step 3: Extract products
             await self.progress.update(
@@ -519,15 +562,13 @@ class Pipeline:
         """
         tracker = ExtractionTracker()
 
-        # Check for OAuth connections before platform-specific branches.
-        # An OAuth connection is authoritative proof of platform, overriding detection.
+        # Check for BigCommerce OAuth connections before platform-specific branches.
+        # A BigCommerce OAuth connection is authoritative proof of platform, overriding detection.
         if self.oauth_store and platform != Platform.BIGCOMMERCE:
             from urllib.parse import urlparse
             import re
             domain = urlparse(shop_url).netloc or shop_url
             bc_conn = await self.oauth_store.get_connection("bigcommerce", domain)
-            if not bc_conn:
-                bc_conn = await self.oauth_store.get_connection_by_domain(domain)
             # Try extracting store hash from mybigcommerce.com domain pattern
             if not bc_conn:
                 m = re.match(r"store-([a-z0-9]+)\.mybigcommerce\.com", domain)
@@ -539,33 +580,78 @@ class Pipeline:
 
         # Select extractor based on platform
         if platform == Platform.SHOPIFY:
-            extractor = ShopifyAPIExtractor()
-            extraction_tier = ExtractionTier.API
-            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-            raw_products = await self._extract_with_circuit_breaker(
-                extractor, shop_url, shop_url
-            )
-            if raw_products:
-                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                tracker.record_success(shop_url, len(raw_products))
-                await self._emit_extraction_metadata(job_id, raw_products, tracker)
-            else:
-                tracker.record_empty(shop_url)
-            # Fallback to full chain on discovered URLs if API returned nothing
-            if not raw_products and urls:
-                logger.info("Shopify API returned 0 products, falling back to extraction chain")
-                raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                    urls, shop_url, job_id, tracker=tracker
+            # Try authenticated Shopify Admin API first (provides barcode/GTIN)
+            shopify_admin_used = False
+            if self.oauth_store:
+                from urllib.parse import urlparse as _sp_urlparse
+                _sp_domain = _sp_urlparse(shop_url).netloc or shop_url
+                sp_conn = await self.oauth_store.get_connection("shopify", _sp_domain)
+                if not sp_conn:
+                    sp_conn = await self.oauth_store.get_connection_by_domain(_sp_domain)
+                if sp_conn and sp_conn.access_token:
+                    from app.extractors.shopify_admin_extractor import ShopifyAdminExtractor
+                    extraction_tier = ExtractionTier.SHOPIFY_ADMIN_API
+                    try:
+                        admin_extractor = ShopifyAdminExtractor(
+                            access_token=sp_conn.access_token,
+                            shop_domain=sp_conn.shop_domain,
+                        )
+                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                        raw_products = await self._extract_with_circuit_breaker(
+                            admin_extractor, shop_url, shop_url
+                        )
+                        if raw_products:
+                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                            tracker.record_success(shop_url, len(raw_products))
+                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                            shopify_admin_used = True
+                        else:
+                            tracker.record_empty(shop_url)
+                    except Exception as e:
+                        logger.warning("Shopify Admin API failed, falling back to public API: %s", e)
+                        raw_products = []
+
+                    if raw_products:
+                        # Admin API provides GTIN natively, no supplementation needed
+                        audit = tracker.build_audit()
+                        quality_score = self.quality_scorer.score_batch(raw_products)
+                        return ExtractionResult(
+                            products=raw_products,
+                            tier=extraction_tier,
+                            quality_score=quality_score,
+                            urls_attempted=len(urls),
+                            audit=audit.to_summary_dict(),
+                        )
+
+            # Fall back to public Shopify API
+            if not shopify_admin_used:
+                extractor = ShopifyAPIExtractor()
+                extraction_tier = ExtractionTier.API
+                await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                raw_products = await self._extract_with_circuit_breaker(
+                    extractor, shop_url, shop_url
                 )
-                # Supplement zero-price / geo-currency products with Shopify API pricing
                 if raw_products:
-                    supplementer = ShopifyPriceSupplementer(self.circuit_breaker)
-                    raw_products = await supplementer.supplement(
-                        raw_products, shop_url
+                    ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                    tracker.record_success(shop_url, len(raw_products))
+                    await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                else:
+                    tracker.record_empty(shop_url)
+                # Fallback to full chain on discovered URLs if API returned nothing
+                if not raw_products and urls:
+                    logger.info("Shopify API returned 0 products, falling back to extraction chain")
+                    raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                        urls, shop_url, job_id, tracker=tracker
                     )
-            raw_products = await self._supplement_gtin_if_needed(
-                raw_products, platform, shop_url, job_id
-            )
+                    # Supplement zero-price / geo-currency products with Shopify API pricing
+                    if raw_products:
+                        supplementer = ShopifyPriceSupplementer(self.circuit_breaker)
+                        raw_products = await supplementer.supplement(
+                            raw_products, shop_url
+                        )
+                raw_products = await self._supplement_gtin_if_needed(
+                    raw_products, platform, shop_url, job_id
+                )
 
         elif platform == Platform.WOOCOMMERCE:
             extractor = WooCommerceAPIExtractor()
