@@ -239,21 +239,21 @@ class TestProductModel:
             in_stock=False,
         )
 
-        # Create another instance with identical key fields
+        # Create another instance with identical stable key fields but different volatile fields
         product2 = Product(
             external_id="prod_789",
-            shop_id="different_shop",  # Different shop_id
+            shop_id="shop_test",
             platform=Platform.MAGENTO,
-            title="Test Product",
+            title="Different Title",  # Different title
             description="Different description",  # Different description
-            price=Decimal("99.99"),
+            price=Decimal("149.99"),  # Different price
             currency="GBP",
-            image_url="https://example.com/test.jpg",
+            image_url="https://example.com/different.jpg",  # Different image
             product_url="https://example.com/test",
             in_stock=True,  # Different stock status
         )
 
-        # Keys should be the same (shop_id, description, in_stock not in key)
+        # Keys should be the same (title, price, image_url, description, in_stock not in key)
         assert product.idempotency_key == product2.idempotency_key
 
     def test_idempotency_key_changes_with_key_fields(self):

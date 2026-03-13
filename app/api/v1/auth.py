@@ -13,6 +13,7 @@ from app.api.deps import get_db, limiter, verify_api_key
 from app.api.v1.shopify_auth import router as shopify_auth_router
 from app.api.v1.woocommerce_auth import router as woocommerce_auth_router
 from app.config import settings
+from app.security.nonce_store import TTLNonceStore
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,8 @@ def _get_oauth_store(db):
 
 # ── BigCommerce OAuth ────────────────────────────────────────────────
 
-# In-memory nonce store for BigCommerce CSRF protection.
-# For multi-process deployments, swap to Redis-backed store.
-_bc_pending_nonces: dict[str, str] = {}
+# For multi-worker deployments, replace with Redis-backed implementation.
+_bc_pending_nonces = TTLNonceStore()
 
 
 @router.get("/bigcommerce/connect")

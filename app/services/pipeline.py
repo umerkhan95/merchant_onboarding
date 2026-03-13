@@ -616,6 +616,7 @@ class Pipeline:
                             tracker.record_empty(shop_url)
                     except Exception as e:
                         logger.warning("Shopify Admin API failed, falling back to public API: %s", e)
+                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
                         raw_products = []
 
                     if raw_products:
@@ -687,6 +688,7 @@ class Pipeline:
                             tracker.record_empty(shop_url)
                     except Exception as e:
                         logger.warning("WooCommerce REST API v3 failed, falling back: %s", e)
+                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
                         raw_products = []
 
                     if raw_products:
@@ -779,6 +781,7 @@ class Pipeline:
                             tracker.record_empty(shop_url)
                     except Exception as e:
                         logger.warning("BigCommerce Admin API failed, falling back to scraping: %s", e)
+                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
                         raw_products = []
 
                     if raw_products:
@@ -1116,7 +1119,7 @@ class Pipeline:
         - **Per-URL path**: otherwise, uses asyncio.gather with per-URL extract() calls.
 
         After all URLs are processed, checks for a catastrophic error rate:
-        if >80% of URLs errored (and at least 6 URLs were attempted), raises
+        if >70% of URLs errored (and at least 4 URLs were attempted), raises
         ExtractionError to abort the pipeline.
 
         Args:
@@ -1210,7 +1213,7 @@ class Pipeline:
 
         # Catastrophic error rate detection
         audit = tracker.build_audit()
-        if audit.urls_attempted > 5 and audit.urls_errored / audit.urls_attempted > 0.8:
+        if audit.urls_attempted > 3 and audit.urls_errored / audit.urls_attempted > 0.7:
             error_rate = audit.urls_errored / audit.urls_attempted
             raise ExtractionError(
                 f"Catastrophic error rate: {error_rate:.0%} of {audit.urls_attempted} URLs failed"
@@ -1259,6 +1262,7 @@ class Pipeline:
                 return []
             except CircuitOpenError:
                 logger.warning("Circuit breaker OPEN for %s, skipping %s", domain, url)
+                tracker.record_error(url, "circuit_breaker_open")
                 return []
             except Exception as e:
                 logger.error("Extraction failed for %s: %s", url, e)
@@ -1281,9 +1285,9 @@ class Pipeline:
             )
             await self._emit_extraction_metadata(job_id, all_products, tracker)
 
-        # Catastrophic error rate detection: abort if >80% of URLs failed
+        # Catastrophic error rate detection: abort if >70% of URLs failed
         audit = tracker.build_audit()
-        if audit.urls_attempted > 5 and audit.urls_errored / audit.urls_attempted > 0.8:
+        if audit.urls_attempted > 3 and audit.urls_errored / audit.urls_attempted > 0.7:
             error_rate = audit.urls_errored / audit.urls_attempted
             raise ExtractionError(
                 f"Catastrophic error rate: {error_rate:.0%} of {audit.urls_attempted} URLs failed"
@@ -1474,11 +1478,18 @@ class Pipeline:
         if not merged:
             return
 
+        _IMAGE_FIELDS = {"image_url", "image", "og:image", "additional_images"}
+
         for idx in indices:
             if idx >= len(products):
                 continue
             product = products[idx]
+            # API-sourced products: only fill image-related fields
+            source = product.get("_source", "")
+            api_sourced = "admin_api" in source if isinstance(source, str) else False
             for key, val in merged.items():
+                if api_sourced and key not in _IMAGE_FIELDS:
+                    continue
                 if not Pipeline._is_value_present(product.get(key)):
                     product[key] = val
 

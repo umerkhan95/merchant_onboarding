@@ -22,14 +22,14 @@ from fastapi.responses import HTMLResponse
 
 from app.api.deps import get_db, limiter, verify_api_key
 from app.config import settings
+from app.security.nonce_store import TTLNonceStore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/shopify", tags=["auth"])
 
-# In-memory nonce store (for single-process deployments).
-# For multi-process, swap to Redis-backed store.
-_pending_nonces: dict[str, str] = {}
+# For multi-worker deployments, replace with Redis-backed implementation.
+_pending_nonces = TTLNonceStore()
 
 
 def _get_oauth_store(db):

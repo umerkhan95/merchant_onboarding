@@ -75,15 +75,17 @@ class Product(BaseModel):
     def compute_idempotency_key(self) -> Product:
         """Compute stable idempotency key from key product fields.
 
-        Format: SHA256 of "{external_id}|{platform}|{title}|{price}|{image_url}"
+        Format: SHA256 of "{external_id}|{platform}|{shop_id}|{sku}"
+        Falls back to including title when both external_id and sku are empty.
         """
         key_components = [
-            self.external_id,
-            self.platform.value,
-            self.title,
-            str(self.price),
-            self.image_url,
+            self.external_id or "",
+            self.platform.value if self.platform else "",
+            self.shop_id or "",
+            self.sku or "",
         ]
+        if not self.external_id and not self.sku:
+            key_components.append(self.title or "")
         key_string = "|".join(key_components)
         self.idempotency_key = hashlib.sha256(key_string.encode("utf-8")).hexdigest()
         return self

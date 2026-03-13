@@ -32,15 +32,14 @@ from pydantic import BaseModel
 
 from app.api.deps import get_db, limiter, verify_api_key
 from app.config import settings
+from app.security.nonce_store import TTLNonceStore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/woocommerce", tags=["auth"])
 
-# In-memory nonce store for CSRF protection.
-# Maps nonce -> shop_domain for verifying callback legitimacy.
-# For multi-process deployments, swap to Redis-backed store.
-_pending_nonces: dict[str, str] = {}
+# For multi-worker deployments, replace with Redis-backed implementation.
+_pending_nonces = TTLNonceStore()
 
 
 def _get_oauth_store(db):
