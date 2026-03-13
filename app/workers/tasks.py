@@ -116,6 +116,12 @@ async def _run_pipeline(job_id: str, shop_url: str, max_urls: int | None = None)
         # Initialize merchant profile ingestor
         profile_ingestor = MerchantProfileIngestor(db_client)
 
+        # Initialize OAuth store if encryption key is configured
+        oauth_store = None
+        if settings.oauth_encryption_key:
+            from app.db.oauth_store import OAuthStore
+            oauth_store = OAuthStore(db_client)
+
         # Initialize LLM-powered extractors (Tiers 4-5) if API key is configured
         smart_css_extractor = None
         llm_extractor = None
@@ -150,6 +156,7 @@ async def _run_pipeline(job_id: str, shop_url: str, max_urls: int | None = None)
             llm_extractor=llm_extractor,
             llm_budget=llm_budget,
             profile_ingestor=profile_ingestor,
+            oauth_store=oauth_store,
         )
 
         # Run pipeline

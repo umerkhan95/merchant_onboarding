@@ -519,6 +519,24 @@ class Pipeline:
         """
         tracker = ExtractionTracker()
 
+        # Check for OAuth connections before platform-specific branches.
+        # An OAuth connection is authoritative proof of platform, overriding detection.
+        if self.oauth_store and platform != Platform.BIGCOMMERCE:
+            from urllib.parse import urlparse
+            import re
+            domain = urlparse(shop_url).netloc or shop_url
+            bc_conn = await self.oauth_store.get_connection("bigcommerce", domain)
+            if not bc_conn:
+                bc_conn = await self.oauth_store.get_connection_by_domain(domain)
+            # Try extracting store hash from mybigcommerce.com domain pattern
+            if not bc_conn:
+                m = re.match(r"store-([a-z0-9]+)\.mybigcommerce\.com", domain)
+                if m:
+                    bc_conn = await self.oauth_store.get_connection("bigcommerce", m.group(1))
+            if bc_conn:
+                logger.info("Found BigCommerce OAuth connection for %s, overriding platform=%s", domain, platform)
+                platform = Platform.BIGCOMMERCE
+
         # Select extractor based on platform
         if platform == Platform.SHOPIFY:
             extractor = ShopifyAPIExtractor()
@@ -598,12 +616,17 @@ class Pipeline:
         elif platform == Platform.BIGCOMMERCE:
             # Try authenticated BigCommerce Admin API first
             if self.oauth_store:
-                bc_conn = await self.oauth_store.get_connection("bigcommerce", shop_url)
+                from urllib.parse import urlparse
+                import re as _re
+                _domain = urlparse(shop_url).netloc or shop_url
+                bc_conn = await self.oauth_store.get_connection("bigcommerce", _domain)
                 if not bc_conn:
-                    # Try matching by domain without scheme
-                    from urllib.parse import urlparse
-                    domain = urlparse(shop_url).netloc or shop_url
-                    bc_conn = await self.oauth_store.get_connection_by_domain(domain)
+                    bc_conn = await self.oauth_store.get_connection_by_domain(_domain)
+                # Try extracting store hash from mybigcommerce.com domain
+                if not bc_conn:
+                    _m = _re.match(r"store-([a-z0-9]+)\.mybigcommerce\.com", _domain)
+                    if _m:
+                        bc_conn = await self.oauth_store.get_connection("bigcommerce", _m.group(1))
                 if bc_conn:
                     from app.extractors.bigcommerce_admin_extractor import BigCommerceAdminExtractor
                     extraction_tier = ExtractionTier.BIGCOMMERCE_API

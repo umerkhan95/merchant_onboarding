@@ -17,7 +17,7 @@ POST /api/v1/onboard {shop_url}
    URLDiscoveryService     -- API pagination / sitemap / deep crawl
         |
         v
-   Extractor (per tier)    -- API > Schema.org > OpenGraph > SmartCSS > LLM
+   Extractor (per tier)    -- API > UnifiedCrawl > SmartCSS > LLM
         |
         v
    ProductNormalizer       -- unified Product schema
@@ -85,17 +85,18 @@ The API server initializes PostgreSQL on startup (creates the products table if 
 
 ## Extraction Tiers
 
-The pipeline tries extraction strategies in order of reliability and speed, falling back through 5 tiers:
+The pipeline tries extraction strategies in order of reliability and speed, falling back through tiers:
 
 | Tier | Strategy | Speed | Reliability | Cost |
 |------|----------|-------|-------------|------|
-| 1 | **Platform API** (Shopify `/products.json`, WooCommerce Store API) | Fastest | Highest | Free |
-| 2 | **Schema.org JSON-LD** (`<script type="application/ld+json">`) | Fast | High | Free |
-| 3 | **OpenGraph** meta tags (`og:title`, `og:image`, `og:price:amount`) | Fast | Medium | Free |
-| 4 | **Smart CSS** (LLM-generated selectors, cached per domain) | Medium | Medium | ~$0.01/domain |
-| 5 | **LLM Extraction** (universal fallback via crawl4ai) | Slow | High | ~$0.01/page |
+| 1 | **Platform API** (Shopify `/products.json`, WooCommerce Store API, Magento REST) | Fastest | Highest | Free |
+| 2 | **UnifiedCrawl** — single crawl extracts JSON-LD + OG tags + markdown prices + scored images | Fast | High | Free |
+| 3 | **Smart CSS** (LLM-generated selectors, cached per domain) | Medium | Medium | ~$0.01/domain |
+| 4 | **LLM Extraction** (universal fallback via crawl4ai) | Slow | High | ~$0.01/page |
 
-Each tier produces raw data that passes through `ProductNormalizer` into a unified schema. If a tier extracts 0 products, the pipeline falls to the next tier. Partial results from failed tiers are merged to enrich the winning tier's output.
+**UnifiedCrawl** replaces the previous separate Schema.org and OpenGraph probes. It crawls once and extracts from 4 layers: JSON-LD structured data, OpenGraph meta tags, rendered markdown (regex price/title extraction), and scored media images. An httpx fast path avoids browser overhead when structured data is sufficient; the browser only launches when price or image is missing.
+
+Each tier produces raw data that passes through `ProductNormalizer` into a unified schema. If a tier's probe fails quality threshold (score < 0.3), the pipeline falls to the next tier. Partial results from failed tiers are merged to enrich the winning tier's output.
 
 ## API Reference
 
@@ -214,7 +215,7 @@ app/
   api/v1/           # Route handlers (onboarding, products, analytics, dlq)
   models/           # Pydantic models (product, job, analytics, enums)
   services/         # Business logic (pipeline, platform_detector, url_discovery, normalizer)
-  extractors/       # Data extraction (shopify_api, woocommerce_api, schema_org, opengraph, css, llm, smart_css)
+  extractors/       # Data extraction (shopify_api, woocommerce_api, unified_crawl, css, llm, smart_css)
   infra/            # Infrastructure (rate_limiter, circuit_breaker, progress_tracker, perf_tracker)
   db/               # Database (supabase_client, bulk_ingestor, queries)
   workers/          # Celery tasks

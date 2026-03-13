@@ -184,7 +184,7 @@ class BigCommerceAdminExtractor(BaseExtractor):
             "handle": url_path.strip("/"),
             "vendor": brand_name,
             "product_type": product.get("type", "physical"),
-            "tags": [cat.get("name", "") for cat in product.get("categories", [])],
+            "tags": [str(cat) if isinstance(cat, int) else cat.get("name", "") for cat in product.get("categories", [])],
             "price": str(product.get("price", "0")),
             "compare_at_price": str(product.get("retail_price", "")) if product.get("retail_price") else None,
             "sku": product.get("sku", "") or first_variant.get("sku", ""),
