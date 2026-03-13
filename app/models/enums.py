@@ -45,4 +45,5 @@ class ExtractionTier(StrEnum):
     SHOPIFY_ADMIN_API = "shopify_admin_api"
     WOOCOMMERCE_API = "woocommerce_api"
     SHOPWARE_API = "shopware_api"
+    MAGENTO_API = "magento_api"
     LLM = "llm"

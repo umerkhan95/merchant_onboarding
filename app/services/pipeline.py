@@ -571,7 +571,7 @@ class Pipeline:
 
         # Check for OAuth connections before platform-specific branches.
         # An OAuth connection is authoritative proof of platform, overriding detection.
-        if self.oauth_store and platform not in (Platform.BIGCOMMERCE, Platform.SHOPWARE):
+        if self.oauth_store and platform not in (Platform.BIGCOMMERCE, Platform.SHOPWARE, Platform.MAGENTO):
             from urllib.parse import urlparse
             import re
             domain = urlparse(shop_url).netloc or shop_url
@@ -591,6 +591,13 @@ class Pipeline:
                 if sw_conn:
                     logger.info("Found Shopware OAuth for %s, overriding platform=%s", domain, platform)
                     platform = Platform.SHOPWARE
+                else:
+                    mg_conn = await self.oauth_store.get_connection("magento", domain)
+                    if not mg_conn:
+                        mg_conn = await self.oauth_store.get_connection_by_domain(domain)
+                    if mg_conn:
+                        logger.info("Found Magento OAuth for %s, overriding platform=%s", domain, platform)
+                        platform = Platform.MAGENTO
 
         # Select extractor based on platform
         if platform == Platform.SHOPIFY:
@@ -735,27 +742,70 @@ class Pipeline:
                 )
 
         elif platform == Platform.MAGENTO:
-            extractor = MagentoAPIExtractor()
-            extraction_tier = ExtractionTier.API
-            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-            raw_products = await self._extract_with_circuit_breaker(
-                extractor, shop_url, shop_url
-            )
-            if raw_products:
-                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                tracker.record_success(shop_url, len(raw_products))
-                await self._emit_extraction_metadata(job_id, raw_products, tracker)
-            else:
-                tracker.record_empty(shop_url)
-            # Fallback to full chain on discovered URLs if API returned nothing
-            if not raw_products and urls:
-                logger.info("Magento API returned 0 products, falling back to extraction chain")
-                raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                    urls, shop_url, job_id, tracker=tracker
+            # Try authenticated Magento Admin API first (provides GTIN from custom attrs)
+            mg_admin_used = False
+            raw_products = []
+            extraction_tier = ExtractionTier.MAGENTO_API
+            if self.oauth_store:
+                from urllib.parse import urlparse as _mg_urlparse
+                _mg_domain = _mg_urlparse(shop_url).netloc or shop_url
+                mg_conn = await self.oauth_store.get_connection("magento", _mg_domain)
+                if not mg_conn:
+                    mg_conn = await self.oauth_store.get_connection_by_domain(_mg_domain)
+                if mg_conn and mg_conn.access_token:
+                    from app.extractors.magento_admin_extractor import MagentoAdminExtractor
+                    try:
+                        mg_extractor = MagentoAdminExtractor(mg_conn)
+                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                        raw_products = await self._extract_with_circuit_breaker(
+                            mg_extractor, shop_url, shop_url
+                        )
+                        if raw_products:
+                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                            tracker.record_success(shop_url, len(raw_products))
+                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                            mg_admin_used = True
+                        else:
+                            tracker.record_empty(shop_url)
+                    except Exception as e:
+                        logger.warning("Magento Admin API failed, falling back to scraping: %s", e)
+                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
+                        raw_products = []
+
+                    if raw_products:
+                        audit = tracker.build_audit()
+                        quality_score = self.quality_scorer.score_batch(raw_products)
+                        return ExtractionResult(
+                            products=raw_products,
+                            tier=extraction_tier,
+                            quality_score=quality_score,
+                            urls_attempted=len(urls),
+                            audit=audit.to_summary_dict(),
+                        )
+
+            # Fall back to unauthenticated public API then scraping chain
+            if not mg_admin_used:
+                extractor = MagentoAPIExtractor()
+                extraction_tier = ExtractionTier.API
+                await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                raw_products = await self._extract_with_circuit_breaker(
+                    extractor, shop_url, shop_url
                 )
-            raw_products = await self._supplement_gtin_if_needed(
-                raw_products, platform, shop_url, job_id
-            )
+                if raw_products:
+                    ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                    tracker.record_success(shop_url, len(raw_products))
+                    await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                else:
+                    tracker.record_empty(shop_url)
+                # Fallback to full chain on discovered URLs if API returned nothing
+                if not raw_products and urls:
+                    logger.info("Magento API returned 0 products, falling back to extraction chain")
+                    raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                        urls, shop_url, job_id, tracker=tracker
+                    )
+                raw_products = await self._supplement_gtin_if_needed(
+                    raw_products, platform, shop_url, job_id
+                )
 
         elif platform == Platform.BIGCOMMERCE:
             # Try authenticated BigCommerce Admin API first

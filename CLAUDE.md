@@ -147,7 +147,7 @@ endpoint for headless stores (Hydrogen/custom frontends).
 | Meta Generator | `content="Shopify"` | `content="WordPress"` | Magento comments | BigCommerce | `content="Shopware"` |
 | Script/CDN | `cdn.shopify.com` | `/wp-content/` | `/media/catalog/` | `cdn*.bigcommerce.com` | `/bundles/storefront/` |
 | CSS Classes | `shopify-section` | `woocommerce` | `catalog-product` | - | - |
-| API Probe | `/products.json` returns JSON | `/wp-json/wc/store/v1/` responds | `/rest/V1/products` responds | - | `/api/_info/config` responds |
+| API Probe | `/products.json` returns JSON | `/wp-json/wc/store/v1/` responds | `/rest/V1/store/storeConfigs` responds | - | `/api/_info/config` responds |
 
 ## URL Discovery
 
@@ -222,6 +222,9 @@ DELETE /api/v1/auth/woocommerce/disconnect?shop=X -> Revoke WooCommerce connecti
 GET    /api/v1/auth/shopware/connect?shop=X -> Instructions for Shopware Integration setup
 POST   /api/v1/auth/shopware/manual          -> Submit Shopware client_id + client_secret
 DELETE /api/v1/auth/shopware/disconnect?shop=X -> Revoke Shopware connection
+GET    /api/v1/auth/magento/connect?shop=X -> Instructions for Magento Integration setup
+POST   /api/v1/auth/magento/manual          -> Submit Magento access_token
+DELETE /api/v1/auth/magento/disconnect?shop=X -> Revoke Magento connection
 GET    /api/v1/auth/connections     -> List all OAuth connections
 GET    /api/v1/auth/connections/{domain} -> Connection status for a shop
 GET    /health                       -> Health check
@@ -284,7 +287,8 @@ merchant_onboarding/
 |   |       +-- dlq.py                # GET /dlq, POST /dlq/{id}/retry
 |   |       +-- analytics.py          # GET /analytics
 |   |       +-- exports.py           # GET /exports/idealo/csv
-|   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify + WooCommerce + Shopware connect/callback/disconnect, connections)
+|   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify + WooCommerce + Shopware + Magento connect/callback/disconnect, connections)
+|   |       +-- magento_auth.py     # Magento 2 Integration token auth (manual access_token entry)
 |       +-- shopware_auth.py    # Shopware 6 OAuth (manual client_credentials entry)
 |   |       +-- shopify_auth.py      # Shopify OAuth sub-router (HMAC-SHA256, CSRF nonce, strict domain validation)
 |   |       +-- woocommerce_auth.py  # WooCommerce auto-auth sub-router (key exchange, CSRF nonce, credential verification)
@@ -315,7 +319,8 @@ merchant_onboarding/
 |   |   +-- shopify_admin_extractor.py # Shopify Admin REST API via OAuth (GTIN/barcode first-class)
 |   |   +-- woocommerce_api.py        # Fetches WooCommerce Store API (public, unauthenticated)
 |   |   +-- woocommerce_admin_extractor.py # WooCommerce REST API v3 via OAuth (GTIN from meta_data, variations)
-|   |   +-- magento_api.py            # Fetches Magento REST API
+|   |   +-- magento_api.py            # Fetches Magento REST API (public, unauthenticated)
+|   |   +-- magento_admin_extractor.py # Magento 2 Admin API via Integration token (EAN from custom attributes)
 |   |   +-- bigcommerce_admin_extractor.py # BigCommerce Admin API V3 via OAuth (GTIN/UPC first-class)
 |   |   +-- shopware_admin_extractor.py # Shopware 6 Admin API via OAuth client_credentials (EAN first-class, 10min token refresh)
 |   |   +-- unified_crawl_extractor.py # Single crawl: JSON-LD + OG + markdown price + media (replaces separate Schema.org/OG probes)
@@ -406,7 +411,8 @@ merchant_onboarding/
 | `ShopifyAdminExtractor` | Fetches Shopify Admin REST API via OAuth. Cursor-based pagination, barcode/GTIN on variants. |
 | `WooCommerceAPIExtractor` | Fetches WooCommerce Store API (public), returns raw dicts. No normalization. |
 | `WooCommerceAdminExtractor` | Fetches WooCommerce REST API v3 via OAuth. GTIN from meta_data (15+ plugin keys). Variable product variations. |
-| `MagentoAPIExtractor` | Fetches Magento REST API, returns raw dicts. No normalization. |
+| `MagentoAPIExtractor` | Fetches Magento REST API (public, unauthenticated), returns raw dicts. No normalization. |
+| `MagentoAdminExtractor` | Fetches Magento 2 Admin API via Integration token. EAN/GTIN from custom attributes. Pagination via searchCriteria. |
 | `BigCommerceAdminExtractor` | Fetches BigCommerce Admin API V3 via OAuth. UPC/GTIN first-class. Brand resolution via cache. |
 | `ShopwareAdminExtractor` | Fetches Shopware 6 Admin API via client_credentials. EAN first-class. Auto-refreshes 10min bearer tokens. |
 | `OAuthStore` | Encrypted OAuth token CRUD (Fernet). Supports OAuth 2.0 + 1.0a fields. |

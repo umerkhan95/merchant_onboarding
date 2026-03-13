@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_db, limiter, verify_api_key
+from app.api.v1.magento_auth import router as magento_auth_router
 from app.api.v1.shopify_auth import router as shopify_auth_router
 from app.api.v1.shopware_auth import router as shopware_auth_router
 from app.api.v1.woocommerce_auth import router as woocommerce_auth_router
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # Include platform auth sub-routers (mounted at /auth/{platform}/*)
+router.include_router(magento_auth_router)
 router.include_router(shopify_auth_router)
 router.include_router(shopware_auth_router)
 router.include_router(woocommerce_auth_router)

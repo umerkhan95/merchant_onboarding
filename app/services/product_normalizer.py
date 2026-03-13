@@ -338,11 +338,14 @@ class ProductNormalizer:
         }
 
     def _normalize_magento(self, raw: dict, shop_url: str) -> dict | None:
-        """Normalize Magento REST API format."""
+        """Normalize Magento REST API format (public or admin)."""
         title = raw.get("name", "").strip()
         if not title:
             logger.warning("Magento product missing name")
             return None
+
+        # Currency: admin extractor passes it through; public API doesn't
+        currency = raw.get("currency", "USD")
 
         # Parse price
         try:
@@ -407,7 +410,7 @@ class ProductNormalizer:
             "description": HTMLSanitizer.sanitize(description),
             "price": price,
             "compare_at_price": None,
-            "currency": "USD",
+            "currency": currency,
             "image_url": image_url,
             "product_url": product_url,
             "sku": raw.get("sku"),
