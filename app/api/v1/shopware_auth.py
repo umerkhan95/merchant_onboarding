@@ -93,12 +93,14 @@ async def shopware_connect(
     return {
         "shop": domain,
         "platform": "shopware",
-        "instructions": (
-            "Create an Integration in your Shopware admin: "
-            "Administration \u2192 Settings \u2192 System \u2192 Integrations. "
-            "Grant read access to Products, then enter the Access key ID and "
-            "Secret access key below."
-        ),
+        "admin_url": f"https://{domain}/admin#/sw/integration/index",
+        "instructions": [
+            {"step": 1, "text": "Open your Shopware admin panel", "link": f"https://{domain}/admin#/sw/integration/index"},
+            {"step": 2, "text": "Click 'Add Integration'"},
+            {"step": 3, "text": "Enter a name (e.g. 'idealo Onboarding')"},
+            {"step": 4, "text": "Enable 'Administrator' access"},
+            {"step": 5, "text": "Save and copy the Access key ID and Secret access key"},
+        ],
         "manual_url": "/api/v1/auth/shopware/manual",
     }
 

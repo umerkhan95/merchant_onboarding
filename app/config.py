@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     woocommerce_callback_url: str = "http://localhost:8000/api/v1/auth/woocommerce/callback"
     woocommerce_return_url: str = "http://localhost:8000/api/v1/auth/woocommerce/return"
     shopware_app_name: str = "Merchant Onboarding"
+    magento_callback_url: str = ""  # e.g. https://your-domain.com/api/v1/auth/magento/callback
+    magento_identity_url: str = ""  # e.g. https://your-domain.com/api/v1/auth/magento/identity
 
     # LLM Extraction
     llm_provider: str = "openai/gpt-4o-mini"

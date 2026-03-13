@@ -88,7 +88,19 @@ class TestShopwareConnect:
         assert "manual_url" in data
         assert "/api/v1/auth/shopware/manual" in data["manual_url"]
 
-    def test_connect_instructions_mention_integration(
+    def test_connect_returns_admin_url_with_domain(
+        self, api_client: TestClient, headers: dict[str, str]
+    ):
+        response = api_client.get(
+            "/api/v1/auth/shopware/connect?shop=my-store.com",
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["admin_url"] == "https://my-store.com/admin#/sw/integration/index"
+
+    def test_connect_returns_structured_instructions(
         self, api_client: TestClient, headers: dict[str, str]
     ):
         response = api_client.get(
@@ -98,7 +110,24 @@ class TestShopwareConnect:
 
         assert response.status_code == 200
         instructions = response.json()["instructions"]
-        assert "Integration" in instructions or "integration" in instructions
+        assert isinstance(instructions, list)
+        assert len(instructions) >= 4
+        assert instructions[0]["step"] == 1
+        assert "text" in instructions[0]
+        # First step should include the deep link
+        assert instructions[0]["link"] == "https://my-store.com/admin#/sw/integration/index"
+
+    def test_connect_admin_url_uses_normalized_domain(
+        self, api_client: TestClient, headers: dict[str, str]
+    ):
+        response = api_client.get(
+            "/api/v1/auth/shopware/connect?shop=https://Shop.Example.COM/",
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["admin_url"] == "https://shop.example.com/admin#/sw/integration/index"
 
     def test_connect_normalizes_domain(
         self, api_client: TestClient, headers: dict[str, str]

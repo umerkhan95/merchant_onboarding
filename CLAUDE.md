@@ -222,8 +222,10 @@ DELETE /api/v1/auth/woocommerce/disconnect?shop=X -> Revoke WooCommerce connecti
 GET    /api/v1/auth/shopware/connect?shop=X -> Instructions for Shopware Integration setup
 POST   /api/v1/auth/shopware/manual          -> Submit Shopware client_id + client_secret
 DELETE /api/v1/auth/shopware/disconnect?shop=X -> Revoke Shopware connection
-GET    /api/v1/auth/magento/connect?shop=X -> Instructions for Magento Integration setup
-POST   /api/v1/auth/magento/manual          -> Submit Magento access_token
+GET    /api/v1/auth/magento/connect?shop=X -> Initiate Magento OAuth 1.0a Integration setup
+POST   /api/v1/auth/magento/callback       -> Magento OAuth 1.0a callback (token exchange, no API key)
+GET    /api/v1/auth/magento/identity        -> Magento identity verification (HTML, no API key)
+POST   /api/v1/auth/magento/manual          -> Submit Magento access_token (manual fallback)
 DELETE /api/v1/auth/magento/disconnect?shop=X -> Revoke Magento connection
 GET    /api/v1/auth/connections     -> List all OAuth connections
 GET    /api/v1/auth/connections/{domain} -> Connection status for a shop
@@ -288,7 +290,7 @@ merchant_onboarding/
 |   |       +-- analytics.py          # GET /analytics
 |   |       +-- exports.py           # GET /exports/idealo/csv
 |   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify + WooCommerce + Shopware + Magento connect/callback/disconnect, connections)
-|   |       +-- magento_auth.py     # Magento 2 Integration token auth (manual access_token entry)
+|   |       +-- magento_auth.py     # Magento 2 OAuth 1.0a callback flow + manual token entry
 |       +-- shopware_auth.py    # Shopware 6 OAuth (manual client_credentials entry)
 |   |       +-- shopify_auth.py      # Shopify OAuth sub-router (HMAC-SHA256, CSRF nonce, strict domain validation)
 |   |       +-- woocommerce_auth.py  # WooCommerce auto-auth sub-router (key exchange, CSRF nonce, credential verification)
