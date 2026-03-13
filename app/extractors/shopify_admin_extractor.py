@@ -24,7 +24,7 @@ _API_VERSION = "2024-10"
 _PAGE_LIMIT = 250
 _MAX_PAGES = 100
 # Shopify leaky bucket: pause when usage exceeds this fraction of the limit
-_RATE_LIMIT_THRESHOLD = 35
+_RATE_LIMIT_FILL_RATIO = 0.85
 
 
 class ShopifyAdminExtractor(BaseExtractor):
@@ -215,9 +215,8 @@ class ShopifyAdminExtractor(BaseExtractor):
         except (ValueError, TypeError):
             return
 
-        if used >= _RATE_LIMIT_THRESHOLD:
-            # Sleep proportionally to how full the bucket is
-            fill_ratio = used / max_limit
+        fill_ratio = used / max_limit
+        if fill_ratio >= _RATE_LIMIT_FILL_RATIO:
             sleep_time = 1.0 if fill_ratio < 0.95 else 2.0
             logger.debug(
                 "Shopify rate limit %d/%d, sleeping %.1fs",

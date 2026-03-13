@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import logging
+import re
 import secrets
 from urllib.parse import urlencode
 
@@ -18,7 +20,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-from app.api.deps import get_db, verify_api_key
+from app.api.deps import get_db, limiter, verify_api_key
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ def _get_oauth_store(db):
 def _validate_shop_domain(shop: str) -> str:
     """Validate and normalize a Shopify shop domain.
 
-    Shopify domains must match: {shop}.myshopify.com or a custom domain.
+    Shopify domains must match: {shop}.myshopify.com per Shopify's security model.
     Returns the normalized domain (no scheme, no trailing slash).
     """
     domain = shop.strip().lower()
@@ -54,9 +56,12 @@ def _validate_shop_domain(shop: str) -> str:
     if not domain:
         raise HTTPException(status_code=400, detail="Shop domain is required")
 
-    # Basic validation: must have at least one dot and no spaces
-    if " " in domain or "\t" in domain:
-        raise HTTPException(status_code=400, detail="Invalid shop domain")
+    # Strict validation: must match Shopify's myshopify.com pattern
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$", domain):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid shop domain: must be {store}.myshopify.com",
+        )
 
     return domain
 
@@ -88,7 +93,9 @@ def _verify_shopify_hmac(query_params: dict[str, str], client_secret: str) -> bo
 
 
 @router.get("/connect")
+@limiter.limit("5/minute")
 async def shopify_connect(
+    request: Request,
     shop: str = Query(..., description="Shopify store domain (e.g. example.myshopify.com)"),
     _: str = Depends(verify_api_key),
 ) -> dict:
@@ -118,6 +125,7 @@ async def shopify_connect(
 
 
 @router.get("/callback", response_class=HTMLResponse)
+@limiter.limit("5/minute")
 async def shopify_callback(
     request: Request,
     code: str = Query(...),
@@ -162,7 +170,7 @@ async def shopify_callback(
 
     if resp.status_code != 200:
         logger.error(
-            "Shopify token exchange failed: %d %s", resp.status_code, resp.text
+            "Shopify token exchange failed: HTTP %d", resp.status_code
         )
         raise HTTPException(
             status_code=502,
@@ -190,8 +198,10 @@ async def shopify_callback(
     logger.info("Shopify OAuth connected: shop=%s, scopes=%s", domain, scope)
 
     # 5. Return HTML that closes the popup window
+    safe_domain = html.escape(domain, quote=True)
+    frontend_origin = getattr(settings, "frontend_url", "http://localhost:3001")
     return HTMLResponse(
-        content="""
+        content=f"""
         <!DOCTYPE html>
         <html>
         <head><title>Connected</title></head>
@@ -199,20 +209,24 @@ async def shopify_callback(
             <h2>Store connected successfully!</h2>
             <p>You can close this window.</p>
             <script>
-                if (window.opener) {
-                    window.opener.postMessage({ type: 'shopify_oauth_complete', shop: '%s' }, '*');
-                }
+                if (window.opener) {{
+                    window.opener.postMessage(
+                        {{ type: 'shopify_oauth_complete', shop: '{safe_domain}' }},
+                        '{html.escape(frontend_origin, quote=True)}'
+                    );
+                }}
                 setTimeout(() => window.close(), 1500);
             </script>
         </body>
         </html>
         """
-        % domain
     )
 
 
 @router.delete("/disconnect")
+@limiter.limit("5/minute")
 async def shopify_disconnect(
+    request: Request,
     shop: str = Query(..., description="Shopify store domain"),
     _: str = Depends(verify_api_key),
     db=Depends(get_db),

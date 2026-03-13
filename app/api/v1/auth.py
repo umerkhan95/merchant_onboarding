@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.api.deps import get_db, verify_api_key
+from app.api.deps import get_db, limiter, verify_api_key
 from app.api.v1.shopify_auth import router as shopify_auth_router
 from app.config import settings
 
@@ -30,9 +31,15 @@ def _get_oauth_store(db):
 
 # ── BigCommerce OAuth ────────────────────────────────────────────────
 
+# In-memory nonce store for BigCommerce CSRF protection.
+# For multi-process deployments, swap to Redis-backed store.
+_bc_pending_nonces: dict[str, str] = {}
+
 
 @router.get("/bigcommerce/connect")
+@limiter.limit("5/minute")
 async def bigcommerce_connect(
+    request: Request,
     shop: str = Query(..., description="BigCommerce store domain (e.g. store-abc123.mybigcommerce.com)"),
     _: str = Depends(verify_api_key),
 ) -> dict:
@@ -44,14 +51,18 @@ async def bigcommerce_connect(
     if not settings.bigcommerce_client_id:
         raise HTTPException(status_code=501, detail="BigCommerce OAuth not configured")
 
+    # Generate CSRF nonce
+    nonce = secrets.token_urlsafe(32)
+    _bc_pending_nonces[nonce] = shop
+
     # BigCommerce OAuth install URL
-    # For single-click apps the URL is different, but for token-based auth:
     params = urlencode({
         "client_id": settings.bigcommerce_client_id,
         "scope": "store_v2_products_read_only",
         "response_type": "code",
         "redirect_uri": settings.bigcommerce_callback_url,
         "context": f"stores/{shop}",
+        "state": nonce,
     })
     auth_url = f"https://login.bigcommerce.com/oauth2/authorize?{params}"
 
@@ -59,10 +70,13 @@ async def bigcommerce_connect(
 
 
 @router.get("/bigcommerce/callback")
+@limiter.limit("5/minute")
 async def bigcommerce_callback(
+    request: Request,
     code: str = Query(...),
     scope: str = Query(...),
     context: str = Query(...),
+    state: str = Query(None),
     db=Depends(get_db),
 ) -> dict:
     """Handle BigCommerce OAuth callback — exchange code for permanent access token.
@@ -72,6 +86,11 @@ async def bigcommerce_callback(
     """
     if not settings.bigcommerce_client_id or not settings.bigcommerce_client_secret:
         raise HTTPException(status_code=501, detail="BigCommerce OAuth not configured")
+
+    # CSRF validation: verify the state nonce matches one we generated
+    if not state or state not in _bc_pending_nonces:
+        raise HTTPException(status_code=403, detail="Invalid or missing state parameter (CSRF check failed)")
+    _bc_pending_nonces.pop(state, None)
 
     # Extract store hash from context (format: "stores/abc123")
     store_hash = context.replace("stores/", "") if context.startswith("stores/") else context
@@ -92,7 +111,7 @@ async def bigcommerce_callback(
         )
 
     if resp.status_code != 200:
-        logger.error("BigCommerce token exchange failed: %d %s", resp.status_code, resp.text)
+        logger.error("BigCommerce token exchange failed: HTTP %d", resp.status_code)
         raise HTTPException(status_code=502, detail="Failed to exchange BigCommerce authorization code")
 
     token_data = resp.json()
@@ -125,7 +144,9 @@ async def bigcommerce_callback(
 
 
 @router.delete("/bigcommerce/disconnect")
+@limiter.limit("5/minute")
 async def bigcommerce_disconnect(
+    request: Request,
     shop: str = Query(..., description="BigCommerce store hash or domain"),
     _: str = Depends(verify_api_key),
     db=Depends(get_db),
@@ -140,7 +161,9 @@ async def bigcommerce_disconnect(
 
 
 @router.get("/connections")
+@limiter.limit(settings.rate_limit_default)
 async def list_connections(
+    request: Request,
     _: str = Depends(verify_api_key),
     db=Depends(get_db),
 ) -> list[dict]:
@@ -150,7 +173,9 @@ async def list_connections(
 
 
 @router.get("/connections/{shop_domain:path}")
+@limiter.limit(settings.rate_limit_default)
 async def get_connection_status(
+    request: Request,
     shop_domain: str,
     _: str = Depends(verify_api_key),
     db=Depends(get_db),
