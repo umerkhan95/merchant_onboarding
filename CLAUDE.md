@@ -128,7 +128,9 @@ with `JsonCssExtractionStrategy`.
 
 Products from the winning tier are enriched with fields from earlier probe results.
 `_merge_tier_fields()` fills missing/empty fields from supplementary tier data
-without overwriting existing values.
+without overwriting existing values. `_fill_missing_fields()` protects API-sourced
+products (`_source` containing "admin_api") by only filling image-related fields
+during re-extraction — prevents homepage data from overwriting correct API titles/prices.
 
 ### Shopify API Price Supplementation
 
@@ -227,6 +229,7 @@ GET    /readiness                    -> Readiness check
 
 - **API Key auth**: `X-API-Key` header, verified per request
 - **OAuth token encryption**: Fernet symmetric encryption at rest for stored OAuth tokens
+- **OAuth CSRF protection**: TTLNonceStore with 10-minute expiry for all OAuth flows
 - **SSRF prevention**: URL validation (scheme allowlist, private IP blocking, port restrictions)
 - **XML safety**: defusedxml blocks entity expansion attacks (Billion Laughs)
 - **Response size limits**: MAX_RESPONSE_SIZE (10MB) on all fetched content
@@ -246,7 +249,7 @@ GET    /readiness                    -> Readiness check
 ### Database: Staging Table + COPY + Upsert
 - **COPY** for bulk load
 - **Staging table -> ON CONFLICT** for idempotent updates
-- SHA256 `idempotency_key` on product data prevents duplicates
+- SHA256 `idempotency_key` on stable identifiers (external_id|platform|shop_id|sku) prevents duplicates
 - DB client created per Celery task, closed in `finally` block
 
 ### Resilience
@@ -345,6 +348,7 @@ merchant_onboarding/
 |   |   +-- url_validator.py          # SSRF-safe URL validation
 |   |   +-- html_sanitizer.py         # HTML sanitization before storage
 |   |   +-- api_key.py                # API key verification
+|   |   +-- nonce_store.py            # TTL-expiring nonce store for OAuth CSRF
 |   +-- exceptions/
 |       +-- handlers.py               # FastAPI exception handlers (RFC 7807)
 |       +-- errors.py                 # Custom exceptions (CircuitOpenError, ExtractionError, SSRFError)
