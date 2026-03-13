@@ -198,6 +198,9 @@ GET    /api/v1/exports/idealo/csv   -> Idealo CSV feed export
 GET    /api/v1/auth/bigcommerce/connect?shop=X -> Initiate BigCommerce OAuth
 GET    /api/v1/auth/bigcommerce/callback       -> BigCommerce OAuth callback
 DELETE /api/v1/auth/bigcommerce/disconnect?shop=X -> Revoke BigCommerce connection
+GET    /api/v1/auth/shopify/connect?shop=X -> Initiate Shopify OAuth
+GET    /api/v1/auth/shopify/callback       -> Shopify OAuth callback (HMAC validated)
+DELETE /api/v1/auth/shopify/disconnect?shop=X -> Revoke Shopify connection
 GET    /api/v1/auth/connections     -> List all OAuth connections
 GET    /api/v1/auth/connections/{domain} -> Connection status for a shop
 GET    /health                       -> Health check
@@ -259,7 +262,8 @@ merchant_onboarding/
 |   |       +-- dlq.py                # GET /dlq, POST /dlq/{id}/retry
 |   |       +-- analytics.py          # GET /analytics
 |   |       +-- exports.py           # GET /exports/idealo/csv
-|   |       +-- auth.py              # OAuth endpoints (BigCommerce connect/callback/disconnect, connections)
+|   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify connect/callback/disconnect, connections)
+|   |       +-- shopify_auth.py      # Shopify OAuth sub-router (HMAC-SHA256, CSRF nonce, strict domain validation)
 |   +-- models/
 |   |   +-- product.py                # Product Pydantic model (unified schema)
 |   |   +-- job.py                    # OnboardingJob model (request/response/status)
@@ -283,7 +287,8 @@ merchant_onboarding/
 |   +-- extractors/
 |   |   +-- base.py                   # BaseExtractor ABC + ExtractionResult dataclass
 |   |   +-- browser_config.py         # Browser/crawl config helpers, stealth levels, fetch_html_with_browser()
-|   |   +-- shopify_api.py            # Fetches /products.json
+|   |   +-- shopify_api.py            # Fetches /products.json (public, unauthenticated)
+|   |   +-- shopify_admin_extractor.py # Shopify Admin REST API via OAuth (GTIN/barcode first-class)
 |   |   +-- woocommerce_api.py        # Fetches WooCommerce Store API
 |   |   +-- magento_api.py            # Fetches Magento REST API
 |   |   +-- bigcommerce_admin_extractor.py # BigCommerce Admin API V3 via OAuth (GTIN/UPC first-class)
@@ -370,7 +375,8 @@ merchant_onboarding/
 |-----------|----------------------|
 | `PlatformDetector` | Takes a URL, returns platform enum + confidence. Nothing else. |
 | `URLDiscoveryService` | Discovers product URLs: API pagination / platform sitemaps / AsyncUrlSeeder / BestFirst crawl. Also parses sitemap XML internally. |
-| `ShopifyAPIExtractor` | Fetches `/products.json`, returns raw product dicts. No normalization. |
+| `ShopifyAPIExtractor` | Fetches public `/products.json`, returns raw product dicts. No normalization. |
+| `ShopifyAdminExtractor` | Fetches Shopify Admin REST API via OAuth. Cursor-based pagination, barcode/GTIN on variants. |
 | `WooCommerceAPIExtractor` | Fetches WooCommerce Store API, returns raw dicts. No normalization. |
 | `MagentoAPIExtractor` | Fetches Magento REST API, returns raw dicts. No normalization. |
 | `BigCommerceAdminExtractor` | Fetches BigCommerce Admin API V3 via OAuth. UPC/GTIN first-class. Brand resolution via cache. |
