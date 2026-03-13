@@ -65,9 +65,20 @@ nothing, falls back to the probe chain below.
 
 | Platform | Endpoint | Auth | Limit |
 |----------|----------|------|-------|
-| Shopify | `/products.json` | None | 250/request, paginate with `?page=N` |
-| WooCommerce | `/wp-json/wc/store/v1/products` | None (Store API) | Variable |
+| Shopify | `/products.json` (public) or Admin REST API (OAuth) | None / OAuth | 250/request |
+| WooCommerce | `/wp-json/wc/store/v1/products` (public) or REST API v3 (OAuth) | None / HTTP Basic | 100/request |
 | Magento 2 | `/rest/V1/products` | None (guest default) | searchCriteria |
+
+**OAuth-first strategy**: For Shopify, WooCommerce, and BigCommerce, the pipeline
+checks for OAuth credentials first. If found, uses the Admin/REST API (richer data,
+GTIN access). Falls back to public API, then scraping chain.
+
+WooCommerce OAuth specifics:
+- Uses WooCommerce auto-auth (`/wc-auth/v1/authorize`) — NOT standard OAuth 2.0
+- WooCommerce POSTs `consumer_key` + `consumer_secret` to our callback
+- All REST API v3 calls use HTTP Basic Auth (`consumer_key:consumer_secret`)
+- GTIN extracted from `meta_data` array (15+ known plugin keys + regex fallback)
+- Variable products require separate `/products/{id}/variations` fetch
 
 ### Tier 2: UnifiedCrawl
 
@@ -201,6 +212,11 @@ DELETE /api/v1/auth/bigcommerce/disconnect?shop=X -> Revoke BigCommerce connecti
 GET    /api/v1/auth/shopify/connect?shop=X -> Initiate Shopify OAuth
 GET    /api/v1/auth/shopify/callback       -> Shopify OAuth callback (HMAC validated)
 DELETE /api/v1/auth/shopify/disconnect?shop=X -> Revoke Shopify connection
+GET    /api/v1/auth/woocommerce/connect?shop=X -> Initiate WooCommerce auto-auth
+POST   /api/v1/auth/woocommerce/callback       -> WooCommerce key callback (POST, not GET)
+GET    /api/v1/auth/woocommerce/return          -> WooCommerce post-auth landing page
+POST   /api/v1/auth/woocommerce/manual          -> Manual consumer key/secret input
+DELETE /api/v1/auth/woocommerce/disconnect?shop=X -> Revoke WooCommerce connection
 GET    /api/v1/auth/connections     -> List all OAuth connections
 GET    /api/v1/auth/connections/{domain} -> Connection status for a shop
 GET    /health                       -> Health check
@@ -262,8 +278,9 @@ merchant_onboarding/
 |   |       +-- dlq.py                # GET /dlq, POST /dlq/{id}/retry
 |   |       +-- analytics.py          # GET /analytics
 |   |       +-- exports.py           # GET /exports/idealo/csv
-|   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify connect/callback/disconnect, connections)
+|   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify + WooCommerce connect/callback/disconnect, connections)
 |   |       +-- shopify_auth.py      # Shopify OAuth sub-router (HMAC-SHA256, CSRF nonce, strict domain validation)
+|   |       +-- woocommerce_auth.py  # WooCommerce auto-auth sub-router (key exchange, CSRF nonce, credential verification)
 |   +-- models/
 |   |   +-- product.py                # Product Pydantic model (unified schema)
 |   |   +-- job.py                    # OnboardingJob model (request/response/status)
@@ -289,7 +306,8 @@ merchant_onboarding/
 |   |   +-- browser_config.py         # Browser/crawl config helpers, stealth levels, fetch_html_with_browser()
 |   |   +-- shopify_api.py            # Fetches /products.json (public, unauthenticated)
 |   |   +-- shopify_admin_extractor.py # Shopify Admin REST API via OAuth (GTIN/barcode first-class)
-|   |   +-- woocommerce_api.py        # Fetches WooCommerce Store API
+|   |   +-- woocommerce_api.py        # Fetches WooCommerce Store API (public, unauthenticated)
+|   |   +-- woocommerce_admin_extractor.py # WooCommerce REST API v3 via OAuth (GTIN from meta_data, variations)
 |   |   +-- magento_api.py            # Fetches Magento REST API
 |   |   +-- bigcommerce_admin_extractor.py # BigCommerce Admin API V3 via OAuth (GTIN/UPC first-class)
 |   |   +-- unified_crawl_extractor.py # Single crawl: JSON-LD + OG + markdown price + media (replaces separate Schema.org/OG probes)
@@ -377,7 +395,8 @@ merchant_onboarding/
 | `URLDiscoveryService` | Discovers product URLs: API pagination / platform sitemaps / AsyncUrlSeeder / BestFirst crawl. Also parses sitemap XML internally. |
 | `ShopifyAPIExtractor` | Fetches public `/products.json`, returns raw product dicts. No normalization. |
 | `ShopifyAdminExtractor` | Fetches Shopify Admin REST API via OAuth. Cursor-based pagination, barcode/GTIN on variants. |
-| `WooCommerceAPIExtractor` | Fetches WooCommerce Store API, returns raw dicts. No normalization. |
+| `WooCommerceAPIExtractor` | Fetches WooCommerce Store API (public), returns raw dicts. No normalization. |
+| `WooCommerceAdminExtractor` | Fetches WooCommerce REST API v3 via OAuth. GTIN from meta_data (15+ plugin keys). Variable product variations. |
 | `MagentoAPIExtractor` | Fetches Magento REST API, returns raw dicts. No normalization. |
 | `BigCommerceAdminExtractor` | Fetches BigCommerce Admin API V3 via OAuth. UPC/GTIN first-class. Brand resolution via cache. |
 | `OAuthStore` | Encrypted OAuth token CRUD (Fernet). Supports OAuth 2.0 + 1.0a fields. |

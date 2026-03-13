@@ -297,7 +297,7 @@ class Pipeline:
                 # Check if we have an OAuth connection that can fetch products
                 # without needing discovered URLs (Admin APIs).
                 has_admin_api = False
-                if self.oauth_store and platform in (Platform.SHOPIFY, Platform.BIGCOMMERCE):
+                if self.oauth_store and platform in (Platform.SHOPIFY, Platform.BIGCOMMERCE, Platform.WOOCOMMERCE):
                     from urllib.parse import urlparse as _oauth_urlparse
                     _oauth_domain = _oauth_urlparse(shop_url).netloc or shop_url
                     _oauth_conn = await self.oauth_store.get_connection(
@@ -307,7 +307,14 @@ class Pipeline:
                         _oauth_conn = await self.oauth_store.get_connection_by_domain(
                             _oauth_domain
                         )
-                    has_admin_api = _oauth_conn is not None and _oauth_conn.access_token is not None
+                    # WooCommerce uses consumer_key instead of access_token
+                    if platform == Platform.WOOCOMMERCE:
+                        has_admin_api = (
+                            _oauth_conn is not None
+                            and _oauth_conn.consumer_key is not None
+                        )
+                    else:
+                        has_admin_api = _oauth_conn is not None and _oauth_conn.access_token is not None
 
                 if not has_admin_api:
                     logger.warning(f"No URLs discovered for {shop_url}")
@@ -654,27 +661,69 @@ class Pipeline:
                 )
 
         elif platform == Platform.WOOCOMMERCE:
-            extractor = WooCommerceAPIExtractor()
-            extraction_tier = ExtractionTier.API
-            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-            raw_products = await self._extract_with_circuit_breaker(
-                extractor, shop_url, shop_url
-            )
-            if raw_products:
-                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                tracker.record_success(shop_url, len(raw_products))
-                await self._emit_extraction_metadata(job_id, raw_products, tracker)
-            else:
-                tracker.record_empty(shop_url)
-            # Fallback to full chain on discovered URLs if API returned nothing
-            if not raw_products and urls:
-                logger.info("WooCommerce API returned 0 products, falling back to extraction chain")
-                raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                    urls, shop_url, job_id, tracker=tracker
+            # Try authenticated WooCommerce REST API v3 first (provides GTIN via meta_data)
+            wc_admin_used = False
+            if self.oauth_store:
+                from urllib.parse import urlparse as _wc_urlparse
+                _wc_domain = _wc_urlparse(shop_url).netloc or shop_url
+                wc_conn = await self.oauth_store.get_connection("woocommerce", _wc_domain)
+                if not wc_conn:
+                    wc_conn = await self.oauth_store.get_connection_by_domain(_wc_domain)
+                if wc_conn and wc_conn.consumer_key and wc_conn.consumer_secret:
+                    from app.extractors.woocommerce_admin_extractor import WooCommerceAdminExtractor
+                    extraction_tier = ExtractionTier.WOOCOMMERCE_API
+                    try:
+                        wc_extractor = WooCommerceAdminExtractor(wc_conn)
+                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                        raw_products = await self._extract_with_circuit_breaker(
+                            wc_extractor, shop_url, shop_url
+                        )
+                        if raw_products:
+                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                            tracker.record_success(shop_url, len(raw_products))
+                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                            wc_admin_used = True
+                        else:
+                            tracker.record_empty(shop_url)
+                    except Exception as e:
+                        logger.warning("WooCommerce REST API v3 failed, falling back: %s", e)
+                        raw_products = []
+
+                    if raw_products:
+                        # REST API v3 provides GTIN natively via meta_data — skip supplementer
+                        audit = tracker.build_audit()
+                        quality_score = self.quality_scorer.score_batch(raw_products)
+                        return ExtractionResult(
+                            products=raw_products,
+                            tier=extraction_tier,
+                            quality_score=quality_score,
+                            urls_attempted=len(urls),
+                            audit=audit.to_summary_dict(),
+                        )
+
+            # Fall back to public WooCommerce Store API
+            if not wc_admin_used:
+                extractor = WooCommerceAPIExtractor()
+                extraction_tier = ExtractionTier.API
+                await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                raw_products = await self._extract_with_circuit_breaker(
+                    extractor, shop_url, shop_url
                 )
-            raw_products = await self._supplement_gtin_if_needed(
-                raw_products, platform, shop_url, job_id
-            )
+                if raw_products:
+                    ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                    tracker.record_success(shop_url, len(raw_products))
+                    await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                else:
+                    tracker.record_empty(shop_url)
+                # Fallback to full chain on discovered URLs if API returned nothing
+                if not raw_products and urls:
+                    logger.info("WooCommerce API returned 0 products, falling back to extraction chain")
+                    raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                        urls, shop_url, job_id, tracker=tracker
+                    )
+                raw_products = await self._supplement_gtin_if_needed(
+                    raw_products, platform, shop_url, job_id
+                )
 
         elif platform == Platform.MAGENTO:
             extractor = MagentoAPIExtractor()

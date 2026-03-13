@@ -11,14 +11,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_db, limiter, verify_api_key
 from app.api.v1.shopify_auth import router as shopify_auth_router
+from app.api.v1.woocommerce_auth import router as woocommerce_auth_router
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Include Shopify auth sub-router (mounted at /auth/shopify/*)
+# Include platform auth sub-routers (mounted at /auth/{platform}/*)
 router.include_router(shopify_auth_router)
+router.include_router(woocommerce_auth_router)
 
 
 def _get_oauth_store(db):

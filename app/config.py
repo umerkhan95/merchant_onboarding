@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     shopify_client_id: str = ""
     shopify_client_secret: str = ""
     shopify_callback_url: str = "http://localhost:8000/api/v1/auth/shopify/callback"
+    woocommerce_app_name: str = "Merchant Onboarding"
+    woocommerce_callback_url: str = "http://localhost:8000/api/v1/auth/woocommerce/callback"
+    woocommerce_return_url: str = "http://localhost:8000/api/v1/auth/woocommerce/return"
 
     # LLM Extraction
     llm_provider: str = "openai/gpt-4o-mini"

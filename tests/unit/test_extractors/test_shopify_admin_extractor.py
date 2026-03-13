@@ -9,7 +9,7 @@ from httpx import Response
 from app.extractors.shopify_admin_extractor import (
     ShopifyAdminExtractor,
     _API_VERSION,
-    _RATE_LIMIT_THRESHOLD,
+    _RATE_LIMIT_FILL_RATIO,
 )
 
 
@@ -253,7 +253,7 @@ async def test_429_twice_stops_extraction(extractor: ShopifyAdminExtractor):
 @pytest.mark.asyncio
 async def test_leaky_bucket_throttle_below_threshold(extractor: ShopifyAdminExtractor):
     """When call limit usage is below threshold, no sleeping occurs."""
-    usage = _RATE_LIMIT_THRESHOLD - 1
+    usage = int(40 * _RATE_LIMIT_FILL_RATIO) - 1  # Below threshold
     with respx.mock:
         respx.get(PRODUCTS_URL).mock(
             return_value=Response(
@@ -379,7 +379,7 @@ class TestHandleRateLimit:
 
         resp = Response(
             200,
-            headers={"X-Shopify-Shop-Api-Call-Limit": f"{_RATE_LIMIT_THRESHOLD}/40"},
+            headers={"X-Shopify-Shop-Api-Call-Limit": f"{int(40 * _RATE_LIMIT_FILL_RATIO)}/40"},
         )
 
         with patch("app.extractors.shopify_admin_extractor.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:

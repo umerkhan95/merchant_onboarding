@@ -8,6 +8,7 @@ import pytest
 import respx
 from httpx import Response
 
+from app.api.v1.auth import _bc_pending_nonces
 from app.db.oauth_store import OAuthConnection
 
 
@@ -56,6 +57,10 @@ def test_bigcommerce_connect_requires_api_key(api_client):
 
 def test_bigcommerce_callback_exchanges_code(api_client):
     """Callback should exchange code for token and store it."""
+    # Set up CSRF nonce
+    nonce = "test-bc-nonce"
+    _bc_pending_nonces[nonce] = "store-abc123"
+
     mock_oauth_store = AsyncMock()
     mock_oauth_store.store_connection = AsyncMock()
 
@@ -78,7 +83,7 @@ def test_bigcommerce_callback_exchanges_code(api_client):
         )
 
         resp = api_client.get(
-            "/api/v1/auth/bigcommerce/callback?code=test-code&scope=store_v2_products_read_only&context=stores/abc123"
+            f"/api/v1/auth/bigcommerce/callback?code=test-code&scope=store_v2_products_read_only&context=stores/abc123&state={nonce}"
         )
 
     assert resp.status_code == 200
@@ -95,6 +100,9 @@ def test_bigcommerce_callback_exchanges_code(api_client):
 
 
 def test_bigcommerce_callback_token_exchange_failure(api_client):
+    nonce = "test-bc-nonce-fail"
+    _bc_pending_nonces[nonce] = "store-abc"
+
     with (
         patch("app.api.v1.auth.settings") as mock_settings,
         respx.mock,
@@ -108,13 +116,16 @@ def test_bigcommerce_callback_token_exchange_failure(api_client):
         )
 
         resp = api_client.get(
-            "/api/v1/auth/bigcommerce/callback?code=bad-code&scope=scope&context=stores/abc"
+            f"/api/v1/auth/bigcommerce/callback?code=bad-code&scope=scope&context=stores/abc&state={nonce}"
         )
 
     assert resp.status_code == 502
 
 
 def test_bigcommerce_callback_no_token_in_response(api_client):
+    nonce = "test-bc-nonce-notoken"
+    _bc_pending_nonces[nonce] = "store-x"
+
     mock_oauth_store = AsyncMock()
 
     with (
@@ -131,7 +142,7 @@ def test_bigcommerce_callback_no_token_in_response(api_client):
         )
 
         resp = api_client.get(
-            "/api/v1/auth/bigcommerce/callback?code=c&scope=s&context=stores/x"
+            f"/api/v1/auth/bigcommerce/callback?code=c&scope=s&context=stores/x&state={nonce}"
         )
 
     assert resp.status_code == 502
