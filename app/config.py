@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     woocommerce_app_name: str = "Merchant Onboarding"
     woocommerce_callback_url: str = "http://localhost:8000/api/v1/auth/woocommerce/callback"
     woocommerce_return_url: str = "http://localhost:8000/api/v1/auth/woocommerce/return"
+    shopware_app_name: str = "Merchant Onboarding"
 
     # LLM Extraction
     llm_provider: str = "openai/gpt-4o-mini"

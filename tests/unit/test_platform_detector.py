@@ -31,6 +31,7 @@ class TestShopifyDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
@@ -56,6 +57,7 @@ class TestShopifyDetection:
             # Mock other probes
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
@@ -83,6 +85,7 @@ class TestShopifyDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -109,6 +112,7 @@ class TestShopifyDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -141,6 +145,7 @@ class TestShopifyDetection:
             )
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -172,6 +177,7 @@ class TestWooCommerceDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
@@ -193,6 +199,7 @@ class TestWooCommerceDetection:
                 return_value=httpx.Response(200, json=wp_json_response)
             )
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
@@ -218,6 +225,7 @@ class TestWooCommerceDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -243,6 +251,7 @@ class TestWooCommerceDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -271,6 +280,7 @@ class TestMagentoDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
@@ -292,6 +302,7 @@ class TestMagentoDetection:
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(
                 return_value=httpx.Response(200, json=magento_api_response)
             )
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
@@ -326,6 +337,7 @@ class TestBigCommerceDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -351,6 +363,7 @@ class TestBigCommerceDetection:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -378,6 +391,7 @@ class TestGenericFallback:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(
                 return_value=httpx.Response(200, text="<html><body>Plain HTML</body></html>")
             )
@@ -409,6 +423,7 @@ class TestConfidenceScore:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
@@ -431,6 +446,7 @@ class TestConfidenceScore:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -461,6 +477,7 @@ class TestTimeoutHandling:
             respx.get("https://shop.example.com/products.json").mock(side_effect=httpx.TimeoutException("Timeout"))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
 
             result = await detector.detect("https://shop.example.com")
@@ -481,6 +498,7 @@ class TestTimeoutHandling:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             # Simulate timeout on HTML probe
             respx.get("https://shop.example.com").mock(side_effect=httpx.TimeoutException("Timeout"))
 
@@ -514,6 +532,7 @@ class TestEdgeCases:
             )
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com/")
@@ -531,6 +550,7 @@ class TestEdgeCases:
             respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(500))
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(500))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(500))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(500))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(500))
 
             result = await detector.detect("https://shop.example.com")
@@ -551,9 +571,109 @@ class TestEdgeCases:
             )
             respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
             respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
 
             result = await detector.detect("https://shop.example.com")
 
             # Should fallback to generic (no valid signals)
             assert result.platform == Platform.GENERIC
+
+
+# ---------------------------------------------------------------------------
+# Shopware Detection Tests
+# ---------------------------------------------------------------------------
+
+
+class TestShopwareDetection:
+    """Test Shopware 6 platform detection via various signals."""
+
+    @pytest.mark.asyncio
+    async def test_shopware_detection_via_header(self) -> None:
+        """Shopware detected via sw-version-id header."""
+        detector = PlatformDetector()
+
+        with respx.mock:
+            respx.head("https://shop.example.com").mock(
+                return_value=httpx.Response(200, headers={"sw-version-id": "abc123"})
+            )
+            respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
+
+            result = await detector.detect("https://shop.example.com")
+
+            assert result.platform == Platform.SHOPWARE
+            assert "header:shopware" in result.signals
+
+    @pytest.mark.asyncio
+    async def test_shopware_detection_via_api(self) -> None:
+        """Shopware detected via /api/_info/config endpoint."""
+        detector = PlatformDetector()
+
+        with respx.mock:
+            respx.head("https://shop.example.com").mock(return_value=httpx.Response(200))
+            respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(200))
+            respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text="<html></html>"))
+
+            result = await detector.detect("https://shop.example.com")
+
+            assert result.platform == Platform.SHOPWARE
+            assert "api:/api/_info/config" in result.signals
+
+    @pytest.mark.asyncio
+    async def test_shopware_detection_via_meta_tag(self) -> None:
+        """Shopware detected via meta generator tag."""
+        detector = PlatformDetector()
+
+        html_content = """
+        <html>
+            <head>
+                <meta name="generator" content="Shopware 6">
+            </head>
+        </html>
+        """
+
+        with respx.mock:
+            respx.head("https://shop.example.com").mock(return_value=httpx.Response(200))
+            respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
+
+            result = await detector.detect("https://shop.example.com")
+
+            assert result.platform == Platform.SHOPWARE
+            assert "meta:generator=shopware" in result.signals
+
+    @pytest.mark.asyncio
+    async def test_shopware_detection_via_storefront_bundle(self) -> None:
+        """Shopware detected via /bundles/storefront/ CDN reference."""
+        detector = PlatformDetector()
+
+        html_content = """
+        <html>
+            <head>
+                <link rel="stylesheet" href="/bundles/storefront/css/main.css">
+            </head>
+        </html>
+        """
+
+        with respx.mock:
+            respx.head("https://shop.example.com").mock(return_value=httpx.Response(200))
+            respx.get("https://shop.example.com/products.json").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/wp-json/").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/rest/V1/store/storeConfigs").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com/api/_info/config").mock(return_value=httpx.Response(404))
+            respx.get("https://shop.example.com").mock(return_value=httpx.Response(200, text=html_content))
+
+            result = await detector.detect("https://shop.example.com")
+
+            assert result.platform == Platform.SHOPWARE
+            assert "cdn:shopware_storefront" in result.signals

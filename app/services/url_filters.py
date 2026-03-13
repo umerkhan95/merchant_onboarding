@@ -18,6 +18,7 @@ PLATFORM_PRODUCT_SITEMAPS: dict[str, list[str]] = {
     "woocommerce": ["/product-sitemap.xml", "/product-sitemap1.xml"],
     "magento": ["/pub/media/sitemap/sitemap.xml", "/media/sitemap.xml"],
     "bigcommerce": ["/xmlsitemap.php"],
+    "shopware": ["/sitemap.xml"],
     "generic": [],
 }
 

@@ -297,7 +297,7 @@ class Pipeline:
                 # Check if we have an OAuth connection that can fetch products
                 # without needing discovered URLs (Admin APIs).
                 has_admin_api = False
-                if self.oauth_store and platform in (Platform.SHOPIFY, Platform.BIGCOMMERCE, Platform.WOOCOMMERCE):
+                if self.oauth_store and platform in (Platform.SHOPIFY, Platform.BIGCOMMERCE, Platform.WOOCOMMERCE, Platform.SHOPWARE):
                     from urllib.parse import urlparse as _oauth_urlparse
                     _oauth_domain = _oauth_urlparse(shop_url).netloc or shop_url
                     _oauth_conn = await self.oauth_store.get_connection(
@@ -569,9 +569,9 @@ class Pipeline:
         """
         tracker = ExtractionTracker()
 
-        # Check for BigCommerce OAuth connections before platform-specific branches.
-        # A BigCommerce OAuth connection is authoritative proof of platform, overriding detection.
-        if self.oauth_store and platform != Platform.BIGCOMMERCE:
+        # Check for OAuth connections before platform-specific branches.
+        # An OAuth connection is authoritative proof of platform, overriding detection.
+        if self.oauth_store and platform not in (Platform.BIGCOMMERCE, Platform.SHOPWARE):
             from urllib.parse import urlparse
             import re
             domain = urlparse(shop_url).netloc or shop_url
@@ -584,6 +584,13 @@ class Pipeline:
             if bc_conn:
                 logger.info("Found BigCommerce OAuth connection for %s, overriding platform=%s", domain, platform)
                 platform = Platform.BIGCOMMERCE
+            else:
+                sw_conn = await self.oauth_store.get_connection("shopware", domain)
+                if not sw_conn:
+                    sw_conn = await self.oauth_store.get_connection_by_domain(domain)
+                if sw_conn:
+                    logger.info("Found Shopware OAuth for %s, overriding platform=%s", domain, platform)
+                    platform = Platform.SHOPWARE
 
         # Select extractor based on platform
         if platform == Platform.SHOPIFY:
@@ -799,6 +806,54 @@ class Pipeline:
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
                 urls, shop_url, job_id, css_schema=BIGCOMMERCE_SCHEMA, tracker=tracker
             )
+
+        elif platform == Platform.SHOPWARE:
+            # Try authenticated Shopware Admin API first
+            sw_admin_used = False
+            raw_products = []
+            extraction_tier = ExtractionTier.SHOPWARE_API
+            if self.oauth_store:
+                from urllib.parse import urlparse as _sw_urlparse
+                _sw_domain = _sw_urlparse(shop_url).netloc or shop_url
+                sw_conn = await self.oauth_store.get_connection("shopware", _sw_domain)
+                if not sw_conn:
+                    sw_conn = await self.oauth_store.get_connection_by_domain(_sw_domain)
+                if sw_conn and sw_conn.access_token and sw_conn.refresh_token:
+                    from app.extractors.shopware_admin_extractor import ShopwareAdminExtractor
+                    try:
+                        sw_extractor = ShopwareAdminExtractor(sw_conn)
+                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+                        raw_products = await self._extract_with_circuit_breaker(
+                            sw_extractor, shop_url, shop_url
+                        )
+                        if raw_products:
+                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                            tracker.record_success(shop_url, len(raw_products))
+                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                            sw_admin_used = True
+                        else:
+                            tracker.record_empty(shop_url)
+                    except Exception as e:
+                        logger.warning("Shopware Admin API failed, falling back to scraping: %s", e)
+                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
+                        raw_products = []
+
+                    if raw_products:
+                        audit = tracker.build_audit()
+                        quality_score = self.quality_scorer.score_batch(raw_products)
+                        return ExtractionResult(
+                            products=raw_products,
+                            tier=extraction_tier,
+                            quality_score=quality_score,
+                            urls_attempted=len(urls),
+                            audit=audit.to_summary_dict(),
+                        )
+
+            # Fallback to scraping chain
+            if not sw_admin_used:
+                raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                    urls, shop_url, job_id, tracker=tracker
+                )
 
         else:  # Platform.GENERIC
             raw_products, extraction_tier = await self._extract_with_fallback_chain(

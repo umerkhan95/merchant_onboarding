@@ -1379,3 +1379,139 @@ class TestRawDataStorageConfig:
 
         assert product is not None
         assert product.raw_data == raw
+
+
+# ---------------------------------------------------------------------------
+# Shopware Normalization Tests
+# ---------------------------------------------------------------------------
+
+
+class TestShopwareNormalization:
+    """Test Shopware 6 Admin API product normalization."""
+
+    def test_normalize_shopware_complete(self, normalizer):
+        """Normalize complete Shopware raw data to valid Product."""
+        raw = {
+            "id": "abc123",
+            "title": "Shopware Test Product",
+            "description": "<p>A great product</p>",
+            "price": "49.99",
+            "compare_at_price": "59.99",
+            "currency": "EUR",
+            "sku": "SW-001",
+            "ean": "4006381333931",
+            "gtin": "4006381333931",
+            "vendor": "Test Brand",
+            "image_url": "https://example.com/media/product.jpg",
+            "additional_images": ["https://example.com/media/product2.jpg"],
+            "product_url": "https://example.com/test-product",
+            "in_stock": True,
+            "tags": ["sale", "summer"],
+            "variants": [
+                {
+                    "variant_id": "var1",
+                    "title": "Size S",
+                    "price": "49.99",
+                    "sku": "SW-001-S",
+                    "in_stock": True,
+                }
+            ],
+            "_source": "shopware_admin_api",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test-shop",
+            platform=Platform.SHOPWARE,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.title == "Shopware Test Product"
+        assert product.price == Decimal("49.99")
+        assert product.compare_at_price == Decimal("59.99")
+        assert product.currency == "EUR"
+        assert product.sku == "SW-001"
+        assert product.gtin == "4006381333931"
+        assert product.vendor == "Test Brand"
+        assert product.image_url == "https://example.com/media/product.jpg"
+        assert product.product_url == "https://example.com/test-product"
+        assert product.in_stock is True
+        assert len(product.variants) == 1
+        assert product.variants[0].title == "Size S"
+        assert product.platform == Platform.SHOPWARE
+
+    def test_normalize_shopware_minimal(self, normalizer):
+        """Normalize Shopware product with minimal fields."""
+        raw = {
+            "title": "Minimal Product",
+            "price": "19.99",
+            "_source": "shopware_admin_api",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test-shop",
+            platform=Platform.SHOPWARE,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.title == "Minimal Product"
+        assert product.price == Decimal("19.99")
+        assert product.currency == "EUR"  # Default for Shopware
+
+    def test_normalize_shopware_missing_title(self, normalizer):
+        """Shopware product without title falls through to generic."""
+        raw = {
+            "price": "19.99",
+            "_source": "shopware_admin_api",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test-shop",
+            platform=Platform.SHOPWARE,
+            shop_url="https://example.com",
+        )
+
+        # No title -> platform normalizer returns None -> generic also returns None
+        assert product is None
+
+    def test_normalize_shopware_ean_validation(self, normalizer):
+        """Shopware EAN is validated via _validate_gtin."""
+        raw = {
+            "title": "EAN Product",
+            "price": "9.99",
+            "ean": "123456789012",  # 12-digit UPC -> zero-padded to 13
+            "_source": "shopware_admin_api",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test-shop",
+            platform=Platform.SHOPWARE,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.gtin == "0123456789012"  # Zero-padded
+
+    def test_normalize_shopware_compare_at_price_same_as_price(self, normalizer):
+        """compare_at_price is None when equal to price."""
+        raw = {
+            "title": "Same Price Product",
+            "price": "29.99",
+            "compare_at_price": "29.99",
+            "_source": "shopware_admin_api",
+        }
+
+        product = normalizer.normalize(
+            raw=raw,
+            shop_id="test-shop",
+            platform=Platform.SHOPWARE,
+            shop_url="https://example.com",
+        )
+
+        assert product is not None
+        assert product.compare_at_price is None

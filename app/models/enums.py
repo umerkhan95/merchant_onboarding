@@ -12,6 +12,7 @@ class Platform(StrEnum):
     WOOCOMMERCE = "woocommerce"
     MAGENTO = "magento"
     BIGCOMMERCE = "bigcommerce"
+    SHOPWARE = "shopware"
     GENERIC = "generic"
 
 
@@ -43,4 +44,5 @@ class ExtractionTier(StrEnum):
     BIGCOMMERCE_API = "bigcommerce_api"
     SHOPIFY_ADMIN_API = "shopify_admin_api"
     WOOCOMMERCE_API = "woocommerce_api"
+    SHOPWARE_API = "shopware_api"
     LLM = "llm"

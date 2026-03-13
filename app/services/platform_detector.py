@@ -46,6 +46,7 @@ class PlatformDetector:
         Platform.WOOCOMMERCE: 4,  # header, api, meta, cdn
         Platform.MAGENTO: 3,  # header, api, meta
         Platform.BIGCOMMERCE: 3,  # meta, cdn, scripts
+        Platform.SHOPWARE: 4,  # header, api, meta, cdn
         Platform.GENERIC: 1,  # fallback always has 1 signal
     }
 
@@ -75,6 +76,7 @@ class PlatformDetector:
             Platform.WOOCOMMERCE: [],
             Platform.MAGENTO: [],
             Platform.BIGCOMMERCE: [],
+            Platform.SHOPWARE: [],
         }
 
         # Use provided client or create a new one
@@ -154,6 +156,12 @@ class PlatformDetector:
                 signals[Platform.WOOCOMMERCE].append("header:wp-json-link")
                 logger.debug(f"Found WooCommerce header in {elapsed:.2f}s")
 
+            # Shopware headers
+            headers_lower = {k.lower(): v for k, v in headers.items()}
+            if "sw-version-id" in headers_lower or "sw-context-token" in headers_lower:
+                signals[Platform.SHOPWARE].append("header:shopware")
+                logger.debug(f"Found Shopware header in {elapsed:.2f}s")
+
         except httpx.TimeoutException:
             logger.debug(f"Header probe timed out for {url}")
         except Exception as e:
@@ -177,6 +185,7 @@ class PlatformDetector:
             self._probe_shopify_api(client, base_url, signals),
             self._probe_woocommerce_api(client, base_url, signals),
             self._probe_magento_api(client, base_url, signals),
+            self._probe_shopware_api_endpoint(client, base_url, signals),
             return_exceptions=True,
         )
 
@@ -244,6 +253,25 @@ class PlatformDetector:
             logger.debug(f"Magento API probe timed out for {base_url}")
         except Exception as e:
             logger.debug(f"Magento API probe failed for {base_url}: {e}")
+
+    async def _probe_shopware_api_endpoint(
+        self, client: httpx.AsyncClient, base_url: str, signals: dict[Platform, list[str]]
+    ) -> None:
+        """Probe Shopware 6 /api/_info/config endpoint (no auth required)."""
+        try:
+            logger.debug(f"Probing Shopware API for {base_url}")
+            start = time.time()
+            response = await client.get(f"{base_url}/api/_info/config", timeout=PROBE_TIMEOUT)
+            elapsed = time.time() - start
+
+            if response.status_code == 200:
+                signals[Platform.SHOPWARE].append("api:/api/_info/config")
+                logger.debug(f"Found Shopware API endpoint in {elapsed:.2f}s")
+
+        except httpx.TimeoutException:
+            logger.debug(f"Shopware API probe timed out for {base_url}")
+        except Exception as e:
+            logger.debug(f"Shopware API probe failed for {base_url}: {e}")
 
     async def _probe_html_content(
         self, client: httpx.AsyncClient, url: str, signals: dict[Platform, list[str]]
@@ -323,6 +351,11 @@ class PlatformDetector:
             signals[Platform.BIGCOMMERCE].append("meta:platform=bigcommerce")
             logger.debug("Found BigCommerce meta platform tag")
 
+        # Shopware meta generator tag (case-insensitive match for "Shopware")
+        if re.search(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\'][^"\']*[Ss]hopware', html, re.IGNORECASE):
+            signals[Platform.SHOPWARE].append("meta:generator=shopware")
+            logger.debug("Found Shopware meta generator tag")
+
     def _analyze_cdn_sources(self, html: str, signals: dict[Platform, list[str]]) -> None:
         """Analyze CDN and script sources for platform indicators.
 
@@ -344,6 +377,11 @@ class PlatformDetector:
         if "/wp-content/plugins/woocommerce/" in html:
             signals[Platform.WOOCOMMERCE].append("cdn:woocommerce-plugin")
             logger.debug("Found WooCommerce plugin reference")
+
+        # Shopware 6 storefront bundle path / JS identifier
+        if "/bundles/storefront/" in html or "shopware-storefront" in html:
+            signals[Platform.SHOPWARE].append("cdn:shopware_storefront")
+            logger.debug("Found Shopware storefront reference")
 
     def _determine_platform(self, signals: dict[Platform, list[str]]) -> tuple[Platform, list[str]]:
         """Determine the most likely platform based on collected signals.

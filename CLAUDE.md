@@ -69,7 +69,7 @@ nothing, falls back to the probe chain below.
 | WooCommerce | `/wp-json/wc/store/v1/products` (public) or REST API v3 (OAuth) | None / HTTP Basic | 100/request |
 | Magento 2 | `/rest/V1/products` | None (guest default) | searchCriteria |
 
-**OAuth-first strategy**: For Shopify, WooCommerce, and BigCommerce, the pipeline
+**OAuth-first strategy**: For Shopify, WooCommerce, BigCommerce, and Shopware, the pipeline
 checks for OAuth credentials first. If found, uses the Admin/REST API (richer data,
 GTIN access). Falls back to public API, then scraping chain.
 
@@ -141,13 +141,13 @@ endpoint for headless stores (Hydrogen/custom frontends).
 
 ## Platform Detection
 
-| Check | Shopify | WooCommerce | Magento 2 | BigCommerce |
-|-------|---------|-------------|-----------|-------------|
-| HTTP Header | `X-ShopId` | - | `X-Magento-*` | - |
-| Meta Generator | `content="Shopify"` | `content="WordPress"` | Magento comments | BigCommerce |
-| Script/CDN | `cdn.shopify.com` | `/wp-content/` | `/media/catalog/` | `cdn*.bigcommerce.com` |
-| CSS Classes | `shopify-section` | `woocommerce` | `catalog-product` | - |
-| API Probe | `/products.json` returns JSON | `/wp-json/wc/store/v1/` responds | `/rest/V1/products` responds | - |
+| Check | Shopify | WooCommerce | Magento 2 | BigCommerce | Shopware 6 |
+|-------|---------|-------------|-----------|-------------|------------|
+| HTTP Header | `X-ShopId` | - | `X-Magento-*` | - | `sw-version-id` |
+| Meta Generator | `content="Shopify"` | `content="WordPress"` | Magento comments | BigCommerce | `content="Shopware"` |
+| Script/CDN | `cdn.shopify.com` | `/wp-content/` | `/media/catalog/` | `cdn*.bigcommerce.com` | `/bundles/storefront/` |
+| CSS Classes | `shopify-section` | `woocommerce` | `catalog-product` | - | - |
+| API Probe | `/products.json` returns JSON | `/wp-json/wc/store/v1/` responds | `/rest/V1/products` responds | - | `/api/_info/config` responds |
 
 ## URL Discovery
 
@@ -219,6 +219,9 @@ POST   /api/v1/auth/woocommerce/callback       -> WooCommerce key callback (POST
 GET    /api/v1/auth/woocommerce/return          -> WooCommerce post-auth landing page
 POST   /api/v1/auth/woocommerce/manual          -> Manual consumer key/secret input
 DELETE /api/v1/auth/woocommerce/disconnect?shop=X -> Revoke WooCommerce connection
+GET    /api/v1/auth/shopware/connect?shop=X -> Instructions for Shopware Integration setup
+POST   /api/v1/auth/shopware/manual          -> Submit Shopware client_id + client_secret
+DELETE /api/v1/auth/shopware/disconnect?shop=X -> Revoke Shopware connection
 GET    /api/v1/auth/connections     -> List all OAuth connections
 GET    /api/v1/auth/connections/{domain} -> Connection status for a shop
 GET    /health                       -> Health check
@@ -281,7 +284,8 @@ merchant_onboarding/
 |   |       +-- dlq.py                # GET /dlq, POST /dlq/{id}/retry
 |   |       +-- analytics.py          # GET /analytics
 |   |       +-- exports.py           # GET /exports/idealo/csv
-|   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify + WooCommerce connect/callback/disconnect, connections)
+|   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify + WooCommerce + Shopware connect/callback/disconnect, connections)
+|       +-- shopware_auth.py    # Shopware 6 OAuth (manual client_credentials entry)
 |   |       +-- shopify_auth.py      # Shopify OAuth sub-router (HMAC-SHA256, CSRF nonce, strict domain validation)
 |   |       +-- woocommerce_auth.py  # WooCommerce auto-auth sub-router (key exchange, CSRF nonce, credential verification)
 |   +-- models/
@@ -313,6 +317,7 @@ merchant_onboarding/
 |   |   +-- woocommerce_admin_extractor.py # WooCommerce REST API v3 via OAuth (GTIN from meta_data, variations)
 |   |   +-- magento_api.py            # Fetches Magento REST API
 |   |   +-- bigcommerce_admin_extractor.py # BigCommerce Admin API V3 via OAuth (GTIN/UPC first-class)
+|   |   +-- shopware_admin_extractor.py # Shopware 6 Admin API via OAuth client_credentials (EAN first-class, 10min token refresh)
 |   |   +-- unified_crawl_extractor.py # Single crawl: JSON-LD + OG + markdown price + media (replaces separate Schema.org/OG probes)
 |   |   +-- markdown_price_extractor.py # Regex-based price/title extraction from rendered markdown
 |   |   +-- schema_org_extractor.py   # JSON-LD parsing (static methods reused by UnifiedCrawl)
@@ -403,6 +408,7 @@ merchant_onboarding/
 | `WooCommerceAdminExtractor` | Fetches WooCommerce REST API v3 via OAuth. GTIN from meta_data (15+ plugin keys). Variable product variations. |
 | `MagentoAPIExtractor` | Fetches Magento REST API, returns raw dicts. No normalization. |
 | `BigCommerceAdminExtractor` | Fetches BigCommerce Admin API V3 via OAuth. UPC/GTIN first-class. Brand resolution via cache. |
+| `ShopwareAdminExtractor` | Fetches Shopware 6 Admin API via client_credentials. EAN first-class. Auto-refreshes 10min bearer tokens. |
 | `OAuthStore` | Encrypted OAuth token CRUD (Fernet). Supports OAuth 2.0 + 1.0a fields. |
 | `UnifiedCrawlExtractor` | Single crawl extracting JSON-LD + OG + markdown price + media. httpx fast path, browser fallback. |
 | `MarkdownPriceExtractor` | Regex-based price/title/currency extraction from rendered markdown. No LLM. |

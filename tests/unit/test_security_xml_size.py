@@ -359,6 +359,9 @@ class TestPlatformDetectorSizeLimits:
         respx.get("https://example.com/rest/V1/store/storeConfigs").mock(
             return_value=httpx.Response(404)
         )
+        respx.get("https://example.com/api/_info/config").mock(
+            return_value=httpx.Response(404)
+        )
         # HTML probe — oversized
         respx.get("https://example.com").mock(
             return_value=httpx.Response(
@@ -390,6 +393,9 @@ class TestPlatformDetectorSizeLimits:
             return_value=httpx.Response(404)
         )
         respx.get("https://example.com/rest/V1/store/storeConfigs").mock(
+            return_value=httpx.Response(404)
+        )
+        respx.get("https://example.com/api/_info/config").mock(
             return_value=httpx.Response(404)
         )
         respx.get("https://example.com").mock(

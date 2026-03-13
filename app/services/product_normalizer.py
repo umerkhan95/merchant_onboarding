@@ -39,6 +39,7 @@ class ProductNormalizer:
             Platform.SHOPIFY: self._normalize_shopify,
             Platform.WOOCOMMERCE: self._normalize_woocommerce,
             Platform.MAGENTO: self._normalize_magento,
+            Platform.SHOPWARE: self._normalize_shopware,
         }
 
         normalized_data = None
@@ -420,6 +421,84 @@ class ProductNormalizer:
             "tags": [],
             "additional_images": additional_images,
             "category_path": [],
+        }
+
+    def _normalize_shopware(self, raw: dict, shop_url: str) -> dict | None:
+        """Normalize Shopware 6 Admin API format.
+
+        The Shopware Admin API extractor pre-flattens product data into a dict
+        with these fields: title/name, description (HTML), price (gross, string),
+        compare_at_price, sku, gtin/barcode/ean, vendor, image_url,
+        additional_images, product_url, in_stock, tags, variants, currency,
+        condition, _source.
+        """
+        title = (raw.get("title") or raw.get("name") or "").strip()
+        if not title:
+            logger.warning("Shopware product missing title/name")
+            return None
+
+        # Parse price — extractor provides gross price as string
+        try:
+            price = Decimal(str(raw.get("price") or "0"))
+        except (InvalidOperation, ValueError):
+            logger.warning("Invalid Shopware price for product %r", raw.get("sku"))
+            price = Decimal("0")
+
+        # Parse compare_at_price
+        compare_at_price = None
+        if raw.get("compare_at_price"):
+            try:
+                cap = Decimal(str(raw["compare_at_price"]))
+                if cap != price:
+                    compare_at_price = cap
+            except (InvalidOperation, ValueError):
+                pass
+
+        # Extract and validate GTIN — EAN is first-class in Shopware
+        gtin = self._validate_gtin(
+            raw.get("gtin") or raw.get("barcode") or raw.get("ean")
+        )
+
+        # Build variants from extractor-provided variant dicts
+        variants: list[Variant] = []
+        for v in raw.get("variants") or []:
+            if not isinstance(v, dict):
+                continue
+            try:
+                variant_price = Decimal(str(v.get("price") or "0"))
+                variants.append(
+                    Variant(
+                        variant_id=str(v.get("variant_id") or v.get("id") or ""),
+                        title=v.get("title") or v.get("name") or "",
+                        price=variant_price,
+                        sku=v.get("sku"),
+                        in_stock=bool(v.get("in_stock", True)),
+                    )
+                )
+            except Exception as e:
+                logger.warning("Failed to parse Shopware variant: %s", e)
+                continue
+
+        return {
+            "external_id": str(raw.get("id") or raw.get("sku") or ""),
+            "title": title,
+            "description": HTMLSanitizer.sanitize(raw.get("description") or ""),
+            "price": price,
+            "compare_at_price": compare_at_price,
+            "currency": raw.get("currency") or "EUR",
+            "image_url": raw.get("image_url") or "",
+            "product_url": raw.get("product_url") or shop_url,
+            "sku": raw.get("sku"),
+            "gtin": gtin,
+            "mpn": None,
+            "vendor": raw.get("vendor") or None,
+            "product_type": None,
+            "in_stock": bool(raw.get("in_stock", True)),
+            "condition": raw.get("condition") or None,
+            "variants": variants,
+            "tags": list(raw.get("tags") or []),
+            "additional_images": list(raw.get("additional_images") or []),
+            "category_path": list(raw.get("tags") or []),
         }
 
     def _normalize_generic(self, raw: dict, shop_url: str) -> dict | None:
