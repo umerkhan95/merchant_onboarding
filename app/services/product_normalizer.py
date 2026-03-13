@@ -231,52 +231,88 @@ class ProductNormalizer:
         }
 
     def _normalize_woocommerce(self, raw: dict, shop_url: str) -> dict | None:
-        """Normalize WooCommerce Store API format."""
-        title = raw.get("name", "").strip()
+        """Normalize WooCommerce Store API or REST API v3 (admin) format."""
+        # REST API v3 (admin) uses "title", Store API uses "name"
+        # Prefer "title" when present (admin API data), fall back to "name" (Store API)
+        title = (raw.get("title") or raw.get("name") or "").strip()
         if not title:
-            logger.warning("WooCommerce product missing name")
+            logger.warning("WooCommerce product missing name/title")
             return None
 
-        # Extract prices with currency conversion
-        prices = raw.get("prices", {})
-        currency_minor_unit = prices.get("currency_minor_unit", 2)
-        divisor = 10**currency_minor_unit
+        # Detect admin API format: has "price" as direct string, no "prices" dict
+        is_admin_api = raw.get("_source") == "woocommerce_admin_api" or (
+            isinstance(raw.get("price"), str) and "prices" not in raw
+        )
 
-        try:
-            price = Decimal(prices.get("price", "0")) / divisor
-        except (InvalidOperation, ValueError):
-            logger.warning(f"Invalid WooCommerce price for product {raw.get('id')}")
-            price = Decimal("0")
-
-        # Compare at price (only if different from price)
-        compare_at_price = None
-        regular_price_raw = prices.get("regular_price")
-        if regular_price_raw:
+        if is_admin_api:
+            # REST API v3: price is a direct string like "69.99"
             try:
-                regular_price = Decimal(regular_price_raw) / divisor
-                if regular_price != price:
-                    compare_at_price = regular_price
+                price = Decimal(raw.get("price") or "0")
             except (InvalidOperation, ValueError):
-                pass
+                logger.warning(f"Invalid WooCommerce admin price for product {raw.get('id')}")
+                price = Decimal("0")
+
+            compare_at_price = None
+            if raw.get("compare_at_price"):
+                try:
+                    cap = Decimal(raw["compare_at_price"])
+                    if cap != price:
+                        compare_at_price = cap
+                except (InvalidOperation, ValueError):
+                    pass
+
+            currency = raw.get("currency", "USD")
+        else:
+            # Store API: price in minor units inside "prices" dict
+            prices = raw.get("prices", {})
+            currency_minor_unit = prices.get("currency_minor_unit", 2)
+            divisor = 10**currency_minor_unit
+
+            try:
+                price = Decimal(prices.get("price", "0")) / divisor
+            except (InvalidOperation, ValueError):
+                logger.warning(f"Invalid WooCommerce price for product {raw.get('id')}")
+                price = Decimal("0")
+
+            compare_at_price = None
+            regular_price_raw = prices.get("regular_price")
+            if regular_price_raw:
+                try:
+                    regular_price = Decimal(regular_price_raw) / divisor
+                    if regular_price != price:
+                        compare_at_price = regular_price
+                except (InvalidOperation, ValueError):
+                    pass
+
+            currency = prices.get("currency_code", "USD")
 
         # Extract image URLs (primary + additional)
         images = raw.get("images", [])
-        image_url = images[0].get("src", "") if images else ""
-        additional_images = [img["src"] for img in images[1:] if img.get("src")]
+        if images and isinstance(images[0], dict):
+            image_url = images[0].get("src", "")
+            additional_images = [img["src"] for img in images[1:] if img.get("src")]
+        else:
+            image_url = raw.get("image_url", "")
+            additional_images = raw.get("additional_images", [])
 
         # Product URL
-        product_url = raw.get("permalink", "")
+        product_url = raw.get("permalink") or raw.get("product_url") or ""
 
         # Extract tags
         tags_raw = raw.get("tags", [])
-        tags = [t.get("name", "") for t in tags_raw if isinstance(t, dict)]
+        tags = [t.get("name", "") for t in tags_raw if isinstance(t, dict)] if tags_raw and isinstance(tags_raw[0], dict) else tags_raw
 
         # Extract category path
         categories = raw.get("categories", [])
         category_path = [
             c.get("name", "") for c in categories
             if isinstance(c, dict) and c.get("name")
-        ]
+        ] if categories and isinstance(categories[0], dict) else categories
+
+        # GTIN: admin API provides it directly; Store API does not
+        gtin = self._validate_gtin(
+            raw.get("gtin") or raw.get("ean") or raw.get("barcode")
+        )
 
         return {
             "external_id": str(raw.get("id", "")),
@@ -284,12 +320,12 @@ class ProductNormalizer:
             "description": HTMLSanitizer.sanitize(raw.get("description", "")),
             "price": price,
             "compare_at_price": compare_at_price,
-            "currency": prices.get("currency_code", "USD"),
+            "currency": currency,
             "image_url": image_url,
             "product_url": product_url,
             "sku": raw.get("sku"),
-            "gtin": None,
-            "mpn": None,
+            "gtin": gtin,
+            "mpn": raw.get("mpn") or None,
             "vendor": None,
             "product_type": None,
             "in_stock": True,
