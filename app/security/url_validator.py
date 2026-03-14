@@ -208,3 +208,12 @@ class URLValidator:
             raise SSRFError(
                 detail=f"Redirect target validation failed: {reason}"
             )
+
+    @staticmethod
+    async def validate_redirect_async(response: object) -> None:
+        """Async version of validate_redirect for httpx.AsyncClient event hooks.
+
+        httpx.AsyncClient requires async event hooks. This wraps the sync
+        validation logic for use with ``event_hooks={"response": [...]}``.
+        """
+        URLValidator.validate_redirect(response)

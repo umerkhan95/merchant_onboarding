@@ -206,13 +206,18 @@ class Pipeline:
             raise
 
     def _create_http_client(self) -> httpx.AsyncClient:
-        """Create a shared httpx.AsyncClient for the pipeline run."""
+        """Create a shared httpx.AsyncClient for the pipeline run.
+
+        Includes SSRF redirect validation hook to block redirects to private IPs.
+        """
         from app.extractors.browser_config import DEFAULT_HEADERS, get_default_user_agent
+        from app.security.url_validator import URLValidator
 
         return httpx.AsyncClient(
             follow_redirects=True,
             timeout=30.0,
             headers={**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()},
+            event_hooks={"response": [URLValidator.validate_redirect_async]},
         )
 
     async def _run_feed_import(self, job_id: str, feed_url: str, shop_url: str) -> dict:
@@ -405,6 +410,22 @@ class Pipeline:
             if len(urls) > effective_max:
                 logger.info(f"Capping discovered URLs from {len(urls)} to {effective_max}")
                 urls = urls[:effective_max]
+
+            # SSRF validation: filter out discovered URLs pointing to private/internal IPs
+            from app.security.url_validator import URLValidator
+            validated_urls = []
+            ssrf_dropped = 0
+            for url in urls:
+                is_valid, reason = URLValidator.validate(url)
+                if is_valid:
+                    validated_urls.append(url)
+                else:
+                    ssrf_dropped += 1
+                    logger.warning("SSRF: dropping discovered URL %s: %s", url, reason)
+            if ssrf_dropped:
+                logger.warning("SSRF: dropped %d of %d discovered URLs", ssrf_dropped, len(urls))
+            urls = validated_urls
+
             logger.info(f"Discovered {len(urls)} URLs for extraction")
 
             if not urls:
@@ -510,15 +531,26 @@ class Pipeline:
             results = self.completeness_checker.check_batch(raw_products)
             plan = self.completeness_checker.build_reextraction_plan(results)
 
-            reextract_urls = len(set(plan.urls_needing_price) | set(plan.urls_needing_image))
-            if reextract_urls > 0 and reextract_urls <= _MAX_REEXTRACTION_URLS:
+            # Cap price and image re-extraction independently (#86)
+            capped_price_urls = plan.urls_needing_price[:_MAX_REEXTRACTION_URLS]
+            capped_image_urls = plan.urls_needing_image[:_MAX_REEXTRACTION_URLS]
+            if capped_price_urls or capped_image_urls:
+                from app.services.completeness_checker import ReextractionPlan
+                capped_plan = ReextractionPlan(
+                    urls_needing_price=capped_price_urls,
+                    urls_needing_image=capped_image_urls,
+                    total_incomplete=plan.total_incomplete,
+                )
+                reextract_urls = len(set(capped_price_urls) | set(capped_image_urls))
                 logger.info(
-                    "Targeted re-extraction: %d incomplete products across %d URLs",
+                    "Targeted re-extraction: %d incomplete products across %d URLs (price: %d, image: %d)",
                     plan.total_incomplete,
                     reextract_urls,
+                    len(capped_price_urls),
+                    len(capped_image_urls),
                 )
                 raw_products = await self._targeted_reextract(
-                    raw_products, plan, shop_url
+                    raw_products, capped_plan, shop_url, platform
                 )
 
             # Steps 4+5: Normalize and ingest in batches
@@ -1519,6 +1551,7 @@ class Pipeline:
         raw_products: list[dict],
         plan,
         shop_url: str,
+        platform: Platform | None = None,
     ) -> list[dict]:
         """Re-extract missing fields from specific URLs using targeted extractors.
 
@@ -1589,7 +1622,7 @@ class Pipeline:
                         len(still_needing_price),
                     )
                     await self._browser_price_reextract(
-                        raw_products, still_needing_price, url_to_indices, shop_url
+                        raw_products, still_needing_price, url_to_indices, shop_url, platform
                     )
 
         return raw_products
@@ -1648,23 +1681,35 @@ class Pipeline:
         urls: list[str],
         url_to_indices: dict[str, list[int]],
         shop_url: str,
+        platform: Platform | None = None,
     ) -> None:
         """Re-extract prices using browser-rendered CSS extraction.
 
-        Uses WooCommerce price selectors with wait_until="networkidle" to
-        capture JS-rendered prices. Falls back gracefully if browser extraction
-        fails or returns no data.
+        Selects the correct CSS schema for the detected platform and wraps
+        each extraction in the circuit breaker for consistent protection.
         """
         from app.extractors.schemas.woocommerce import WOOCOMMERCE_SCHEMA
+        from app.extractors.schemas.shopify import SHOPIFY_SCHEMA
 
-        # Create a price-focused CSS extractor with networkidle wait
-        css_extractor = CSSExtractor(WOOCOMMERCE_SCHEMA)
+        # Select platform-appropriate schema (#87)
+        if platform == Platform.SHOPIFY:
+            schema = SHOPIFY_SCHEMA
+        elif platform == Platform.BIGCOMMERCE:
+            schema = BIGCOMMERCE_SCHEMA
+        elif platform == Platform.WOOCOMMERCE:
+            schema = WOOCOMMERCE_SCHEMA
+        else:
+            schema = GENERIC_SCHEMA
+
+        css_extractor = CSSExtractor(schema)
 
         for url in urls:
             try:
-                result = await css_extractor.extract(url)
-                supplement = result.products
-            except Exception:
+                supplement = await self._extract_with_circuit_breaker(
+                    css_extractor, url, shop_url
+                )
+            except (CircuitOpenError, Exception) as e:
+                logger.warning("Browser price re-extraction failed for %s: %s", url, e)
                 supplement = []
 
             if supplement:
