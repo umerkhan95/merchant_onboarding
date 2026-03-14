@@ -87,13 +87,13 @@ DO UPDATE SET
 
 # Read operations
 SELECT_PRODUCTS_BY_SHOP = """
-SELECT * FROM products WHERE shop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3;
+SELECT * FROM products WHERE shop_id = $1 ORDER BY (price > 0) DESC, created_at DESC LIMIT $2 OFFSET $3;
 """
 
 SELECT_PRODUCTS_BY_DOMAIN = """
 SELECT * FROM products
 WHERE shop_id LIKE '%' || $1 || '%'
-ORDER BY created_at DESC LIMIT $2 OFFSET $3;
+ORDER BY (price > 0) DESC, created_at DESC LIMIT $2 OFFSET $3;
 """
 
 COUNT_PRODUCTS_BY_SHOP = """
@@ -354,4 +354,110 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS mpn TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS condition TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS additional_images JSONB DEFAULT '[]';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS category_path JSONB DEFAULT '[]';
+"""
+
+# --- Product Updates ---
+
+UPDATE_PRODUCT = """
+UPDATE products
+SET {set_clause},
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+UPDATE_PRODUCTS_BULK = """
+UPDATE products
+SET {set_clause},
+    updated_at = NOW()
+WHERE shop_id = $1 AND ({match_clause})
+RETURNING id, external_id, sku;
+"""
+
+# --- Merchant Settings ---
+
+CREATE_MERCHANT_SETTINGS_TABLE = """
+CREATE TABLE IF NOT EXISTS merchant_settings (
+    id BIGSERIAL PRIMARY KEY,
+    shop_id TEXT NOT NULL UNIQUE,
+    delivery_time TEXT DEFAULT '',
+    delivery_costs TEXT DEFAULT '',
+    payment_costs TEXT DEFAULT '',
+    brand_fallback TEXT DEFAULT '',
+    default_condition TEXT DEFAULT 'NEW',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_merchant_settings_shop_id ON merchant_settings(shop_id);
+"""
+
+UPSERT_MERCHANT_SETTINGS = """
+INSERT INTO merchant_settings (
+    shop_id, delivery_time, delivery_costs, payment_costs,
+    brand_fallback, default_condition
+) VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (shop_id) DO UPDATE SET
+    delivery_time = EXCLUDED.delivery_time,
+    delivery_costs = EXCLUDED.delivery_costs,
+    payment_costs = EXCLUDED.payment_costs,
+    brand_fallback = EXCLUDED.brand_fallback,
+    default_condition = EXCLUDED.default_condition,
+    updated_at = NOW()
+RETURNING *;
+"""
+
+SELECT_MERCHANT_SETTINGS = """
+SELECT * FROM merchant_settings WHERE shop_id = $1;
+"""
+
+# --- Product Completeness ---
+
+SELECT_PRODUCT_COMPLETENESS = """
+SELECT id, title, sku, external_id, gtin, vendor, mpn, condition,
+       image_url, product_url, price, description, category_path
+FROM products
+WHERE shop_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+"""
+
+SELECT_PRODUCT_COMPLETENESS_BY_DOMAIN = """
+SELECT id, title, sku, external_id, gtin, vendor, mpn, condition,
+       image_url, product_url, price, description, category_path
+FROM products
+WHERE shop_id LIKE '%' || $1 || '%'
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+"""
+
+COUNT_PRODUCTS_MISSING_FIELD = """
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE gtin IS NOT NULL AND gtin != '') AS has_gtin,
+    COUNT(*) FILTER (WHERE vendor IS NOT NULL AND vendor != '') AS has_brand,
+    COUNT(*) FILTER (WHERE mpn IS NOT NULL AND mpn != '') AS has_mpn,
+    COUNT(*) FILTER (WHERE condition IS NOT NULL AND condition != '') AS has_condition,
+    COUNT(*) FILTER (WHERE image_url IS NOT NULL AND image_url != '') AS has_image,
+    COUNT(*) FILTER (WHERE description IS NOT NULL AND description != '') AS has_description,
+    COUNT(*) FILTER (WHERE category_path IS NOT NULL AND category_path != '[]'::jsonb) AS has_category
+FROM products
+WHERE shop_id = $1;
+"""
+
+COUNT_PRODUCTS_MISSING_FIELD_BY_DOMAIN = """
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE gtin IS NOT NULL AND gtin != '') AS has_gtin,
+    COUNT(*) FILTER (WHERE vendor IS NOT NULL AND vendor != '') AS has_brand,
+    COUNT(*) FILTER (WHERE mpn IS NOT NULL AND mpn != '') AS has_mpn,
+    COUNT(*) FILTER (WHERE condition IS NOT NULL AND condition != '') AS has_condition,
+    COUNT(*) FILTER (WHERE image_url IS NOT NULL AND image_url != '') AS has_image,
+    COUNT(*) FILTER (WHERE description IS NOT NULL AND description != '') AS has_description,
+    COUNT(*) FILTER (WHERE category_path IS NOT NULL AND category_path != '[]'::jsonb) AS has_category
+FROM products
+WHERE shop_id LIKE '%' || $1 || '%';
+"""
+
+SELECT_MERCHANT_SETTINGS_BY_DOMAIN = """
+SELECT * FROM merchant_settings WHERE shop_id LIKE '%' || $1 || '%';
 """

@@ -1,0 +1,4 @@
+id	title	description	link	price	gtin	brand	image_link	additional_image_link	availability	condition	product_type	mpn	sale_price
+PROD-001	Weber Spirit II E-310 Gas Grill	3-burner gas grill	https://test-store.com/grills/spirit-ii-e310	449.99 EUR	4012345678901	Weber	https://test-store.com/media/spirit-ii.jpg	https://test-store.com/media/spirit-ii-side.jpg	in_stock	new	Home & Garden > Outdoor > Grills	44010001
+PROD-002	Cast Iron Griddle 12 Inch	Pre-seasoned griddle	https://test-store.com/accessories/griddle-12	59.99 EUR			https://test-store.com/media/griddle.jpg		in_stock	new	Home & Garden > Outdoor > Accessories		39.99 EUR
+PROD-003	Premium Wood Pellets 20lb	Hardwood blend pellets	https://test-store.com/fuel/wood-pellets-20lb	24.99 USD	0012345678905	Weber	https://test-store.com/media/pellets.jpg		out_of_stock	new

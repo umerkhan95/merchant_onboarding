@@ -100,12 +100,67 @@ export interface Product {
   image_url: string;
   product_url: string;
   sku: string | null;
+  gtin: string | null;
+  mpn: string | null;
   vendor: string | null;
   product_type: string | null;
   in_stock: boolean;
+  condition: string | null;
   variants: Variant[];
   tags: string[];
+  category_path: string[];
   scraped_at: string;
+}
+
+export interface MerchantSettings {
+  shop_id: string;
+  delivery_time: string;
+  delivery_costs: string;
+  payment_costs: string;
+  brand_fallback: string;
+  default_condition: string;
+}
+
+export interface MerchantSettingsResponse {
+  shop_id: string;
+  settings: MerchantSettings | null;
+}
+
+export interface CompletenessProduct {
+  id: number;
+  title: string;
+  sku: string;
+  score: number;
+  missing_fields: string[];
+  idealo_ready: boolean;
+}
+
+export interface FieldCoverage {
+  present: number;
+  missing: number;
+  coverage_pct: number;
+}
+
+export interface CompletenessSummary {
+  total: number;
+  fields: Record<string, FieldCoverage>;
+  idealo_ready?: number;
+  idealo_ready_pct?: number;
+}
+
+export interface CompletenessResponse {
+  products: CompletenessProduct[];
+  summary: CompletenessSummary;
+  shop_id: string;
+}
+
+export interface ValidationResponse {
+  shop_id: string;
+  ready: boolean;
+  issues: string[];
+  warnings: string[];
+  issue_count: number;
+  warning_count: number;
 }
 
 export interface PaginationMeta {

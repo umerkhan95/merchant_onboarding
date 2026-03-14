@@ -14,8 +14,13 @@ from fastapi.responses import PlainTextResponse
 
 from app.api.deps import get_db, limiter, require_api_key
 from app.config import settings
-from app.db.queries import SELECT_PRODUCTS_BY_DOMAIN, SELECT_PRODUCTS_BY_SHOP
-from app.exceptions.errors import NotFoundError
+from app.db.queries import (
+    SELECT_MERCHANT_SETTINGS,
+    SELECT_MERCHANT_SETTINGS_BY_DOMAIN,
+    SELECT_PRODUCTS_BY_DOMAIN,
+    SELECT_PRODUCTS_BY_SHOP,
+)
+from app.exceptions.errors import NotFoundError, ValidationError
 from app.exporters.idealo_csv import IdealoCSVExporter
 from app.models.enums import Platform
 from app.models.product import Product
@@ -108,36 +113,64 @@ async def _fetch_all_products(db: DatabaseClient, shop_id: str) -> list:
 async def export_idealo_csv(
     request: Request,
     shop_id: str = Query(..., description="Shop/merchant identifier"),
-    delivery_time: str = Query("", description="Delivery time (e.g. '1-3 working days')"),
-    delivery_costs: str = Query("", description="Delivery costs (e.g. '4.95' or 'DHL:4.95;DPD:5.95')"),
-    payment_costs: str = Query("", description="Payment costs (e.g. '0.00' or 'PayPal:0.35')"),
-    brand_fallback: str = Query("", description="Fallback brand name when product has no vendor"),
+    delivery_time: str = Query("", description="Delivery time override (uses stored settings if empty)"),
+    delivery_costs: str = Query("", description="Delivery costs override (uses stored settings if empty)"),
+    payment_costs: str = Query("", description="Payment costs override (uses stored settings if empty)"),
+    brand_fallback: str = Query("", description="Fallback brand name override"),
+    validate: bool = Query(False, description="If true, return validation errors instead of CSV when mandatory fields missing"),
     db: DatabaseClient | None = Depends(get_db),
 ) -> PlainTextResponse:
     """Export products as idealo-compatible CSV feed.
 
-    Returns comma-separated values with idealo's required columns.
-    Merchant must provide delivery_time, delivery_costs, and payment_costs.
+    Uses stored merchant settings for delivery/costs/payment. Query params override stored values.
+    When validate=true, returns validation errors if mandatory settings are missing.
     """
     if db is None:
         raise NotFoundError("Database unavailable")
 
     shop_id = normalize_shop_url(shop_id)
-    rows = await _fetch_all_products(db, shop_id)
 
+    # Load stored merchant settings, let query params override
+    stored_settings: dict[str, Any] = {}
+    async with db.pool.acquire() as conn:
+        settings_row = await conn.fetchrow(SELECT_MERCHANT_SETTINGS, shop_id)
+        if not settings_row:
+            domain = _extract_domain(shop_id)
+            settings_row = await conn.fetchrow(SELECT_MERCHANT_SETTINGS_BY_DOMAIN, domain)
+    if settings_row:
+        stored_settings = dict(settings_row)
+
+    final_delivery_time = delivery_time or stored_settings.get("delivery_time", "")
+    final_delivery_costs = delivery_costs or stored_settings.get("delivery_costs", "")
+    final_payment_costs = payment_costs or stored_settings.get("payment_costs", "")
+    final_brand_fallback = brand_fallback or stored_settings.get("brand_fallback", "")
+
+    # Validation gate: check mandatory settings when validate=true
+    if validate:
+        issues = []
+        if not final_delivery_time:
+            issues.append("delivery_time is required")
+        if not final_delivery_costs:
+            issues.append("delivery_costs is required")
+        if not final_payment_costs:
+            issues.append("payment_costs is required")
+        if issues:
+            raise ValidationError(f"Export blocked: {'; '.join(issues)}")
+
+    rows = await _fetch_all_products(db, shop_id)
     if not rows:
         raise NotFoundError(f"No products found for shop: {shop_id}")
 
     product_models = _rows_to_products(rows)
 
-    # Use shop domain as brand fallback if merchant didn't provide one
+    # Use shop domain as brand fallback if neither query param nor stored setting provides one
     domain = _extract_domain(shop_id)
-    fallback = brand_fallback or domain.split(".")[0].replace("-", " ").title()
+    fallback = final_brand_fallback or domain.split(".")[0].replace("-", " ").title()
 
     exporter = IdealoCSVExporter(
-        delivery_time=delivery_time,
-        delivery_costs=delivery_costs,
-        payment_costs=payment_costs,
+        delivery_time=final_delivery_time,
+        delivery_costs=final_delivery_costs,
+        payment_costs=final_payment_costs,
         brand_fallback=fallback,
     )
     csv_content = exporter.export(product_models)
@@ -148,3 +181,66 @@ async def export_idealo_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="idealo-feed-{filename}.csv"'},
     )
+
+
+@router.get("/idealo/validate", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
+async def validate_idealo_export(
+    request: Request,
+    shop_id: str = Query(..., description="Shop/merchant identifier"),
+    db: DatabaseClient | None = Depends(get_db),
+) -> dict[str, Any]:
+    """Check if shop is ready for idealo export.
+
+    Returns validation status with list of issues to fix.
+    """
+    if db is None:
+        raise NotFoundError("Database unavailable")
+
+    shop_id = normalize_shop_url(shop_id)
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    # Check merchant settings
+    async with db.pool.acquire() as conn:
+        settings_row = await conn.fetchrow(SELECT_MERCHANT_SETTINGS, shop_id)
+        if not settings_row:
+            domain = _extract_domain(shop_id)
+            settings_row = await conn.fetchrow(SELECT_MERCHANT_SETTINGS_BY_DOMAIN, domain)
+
+    if not settings_row:
+        issues.append("Merchant settings not configured (delivery, costs, payment)")
+    else:
+        s = dict(settings_row)
+        if not s.get("delivery_time"):
+            issues.append("delivery_time is required")
+        if not s.get("delivery_costs"):
+            issues.append("delivery_costs is required")
+        if not s.get("payment_costs"):
+            issues.append("payment_costs is required")
+
+    # Check products
+    rows = await _fetch_all_products(db, shop_id)
+    if not rows:
+        issues.append("No products found")
+    else:
+        product_models = _rows_to_products(rows)
+        missing_brand = sum(1 for p in product_models if not p.vendor)
+        missing_gtin = sum(1 for p in product_models if not p.gtin)
+        missing_sku = sum(1 for p in product_models if not p.sku and not p.external_id)
+
+        if missing_sku > 0:
+            issues.append(f"{missing_sku} products missing SKU/external_id (mandatory)")
+        if missing_brand > 0:
+            warnings.append(f"{missing_brand} products missing brand (will use fallback)")
+        if missing_gtin > 0:
+            warnings.append(f"{missing_gtin} products missing GTIN/EAN")
+
+    return {
+        "shop_id": shop_id,
+        "ready": len(issues) == 0,
+        "issues": issues,
+        "warnings": warnings,
+        "issue_count": len(issues),
+        "warning_count": len(warnings),
+    }

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3, retry_backoff=True)
-def run_onboarding_pipeline(self, job_id: str, shop_url: str, max_urls: int | None = None) -> dict:
+def run_onboarding_pipeline(self, job_id: str, shop_url: str, max_urls: int | None = None, feed_url: str | None = None) -> dict:
     """Celery task that runs the async pipeline.
 
     Args:
@@ -44,7 +44,7 @@ def run_onboarding_pipeline(self, job_id: str, shop_url: str, max_urls: int | No
     asyncio.set_event_loop(loop)
 
     try:
-        result = loop.run_until_complete(_run_pipeline(job_id, shop_url, max_urls=max_urls))
+        result = loop.run_until_complete(_run_pipeline(job_id, shop_url, max_urls=max_urls, feed_url=feed_url))
         logger.info(f"Onboarding task completed for job {job_id}: {result}")
         return result
     except Exception as exc:
@@ -77,7 +77,7 @@ async def _write_to_dlq(url: str, error: str) -> None:
         await redis_client.aclose()
 
 
-async def _run_pipeline(job_id: str, shop_url: str, max_urls: int | None = None) -> dict:
+async def _run_pipeline(job_id: str, shop_url: str, max_urls: int | None = None, feed_url: str | None = None) -> dict:
     """Run the async pipeline with all infrastructure components.
 
     Args:
@@ -160,7 +160,7 @@ async def _run_pipeline(job_id: str, shop_url: str, max_urls: int | None = None)
         )
 
         # Run pipeline
-        result = await pipeline.run(job_id, shop_url, max_urls=max_urls)
+        result = await pipeline.run(job_id, shop_url, max_urls=max_urls, feed_url=feed_url)
 
         return result
 

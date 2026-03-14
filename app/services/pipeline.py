@@ -172,7 +172,7 @@ class Pipeline:
 
     async def run(
         self, job_id: str, shop_url: str, timeout: int = _PIPELINE_TIMEOUT_SECONDS,
-        max_urls: int | None = None,
+        max_urls: int | None = None, feed_url: str | None = None,
     ) -> dict:
         """Run the full pipeline: detect -> discover -> extract -> normalize -> ingest.
 
@@ -181,14 +181,17 @@ class Pipeline:
             shop_url: Merchant shop URL to onboard
             timeout: Max seconds before the pipeline is killed (default 30 min)
             max_urls: Cap discovered URLs to this number (None = no cap)
+            feed_url: Google Shopping feed URL — if provided, skips detection/discovery/extraction
 
         Returns:
             Summary dict with platform, counts, and extraction tier
         """
         try:
-            return await asyncio.wait_for(
-                self._run_inner(job_id, shop_url, max_urls=max_urls), timeout=timeout
-            )
+            if feed_url:
+                coro = self._run_feed_import(job_id, feed_url, shop_url or feed_url)
+            else:
+                coro = self._run_inner(job_id, shop_url, max_urls=max_urls)
+            return await asyncio.wait_for(coro, timeout=timeout)
         except asyncio.TimeoutError:
             logger.error("Pipeline timed out after %ds for job %s", timeout, job_id)
             current_progress = await self.progress.get(job_id)
@@ -211,6 +214,117 @@ class Pipeline:
             timeout=30.0,
             headers={**DEFAULT_HEADERS, "User-Agent": get_default_user_agent()},
         )
+
+    async def _run_feed_import(self, job_id: str, feed_url: str, shop_url: str) -> dict:
+        """Shortcut pipeline path: parse a Google Shopping feed, normalize, ingest.
+
+        Skips platform detection, URL discovery, and the extraction probe chain.
+        The feed already contains complete product data with GTINs.
+        """
+        from app.extractors.google_feed_extractor import GoogleFeedExtractor
+        from urllib.parse import urlparse as _feed_urlparse
+
+        shop_url = shop_url or feed_url
+        # Derive a shop domain from feed URL if no shop_url
+        parsed = _feed_urlparse(feed_url)
+        feed_domain = parsed.netloc or feed_url
+
+        logger.info("Feed import for job %s: %s", job_id, feed_url)
+
+        await self.progress.update(
+            job_id=job_id, processed=0, total=0,
+            status=JobStatus.EXTRACTING,
+            current_step="Parsing Google Shopping feed",
+        )
+        await self.progress.set_metadata(
+            job_id,
+            shop_url=shop_url,
+            platform=Platform.GENERIC.value,
+            extraction_tier=ExtractionTier.GOOGLE_FEED.value,
+            started_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        extractor = GoogleFeedExtractor()
+        result = await extractor.extract(feed_url)
+
+        if result.error or result.is_empty:
+            reason = result.error or "Feed returned no products"
+            await self.progress.update(
+                job_id=job_id, processed=0, total=0,
+                status=JobStatus.NEEDS_REVIEW,
+                current_step=f"Feed import failed: {reason}",
+                error=reason,
+            )
+            return {
+                "platform": Platform.GENERIC.value,
+                "total_extracted": 0,
+                "total_normalized": 0,
+                "total_ingested": 0,
+                "extraction_tier": ExtractionTier.GOOGLE_FEED.value,
+                "coverage_percentage": 0.0,
+                "urls_failed": 0,
+            }
+
+        raw_products = result.products
+        total_extracted = len(raw_products)
+        logger.info("Feed parsed: %d products from %s", total_extracted, feed_url)
+
+        # Normalize and ingest (same as standard pipeline Steps 4+5)
+        await self.progress.update(
+            job_id=job_id, processed=0, total=total_extracted,
+            status=JobStatus.NORMALIZING,
+            current_step=f"Normalizing {total_extracted} products from feed",
+        )
+
+        total_normalized = 0
+        total_ingested = 0
+        for batch_start in range(0, total_extracted, _NORMALIZE_BATCH_SIZE):
+            batch_end = min(batch_start + _NORMALIZE_BATCH_SIZE, total_extracted)
+            raw_batch = raw_products[batch_start:batch_end]
+
+            normalized_batch = []
+            for raw in raw_batch:
+                product = self.normalizer.normalize(
+                    raw=raw, shop_id=shop_url,
+                    platform=Platform.GENERIC, shop_url=shop_url,
+                )
+                if product:
+                    normalized_batch.append(product)
+
+            total_normalized += len(normalized_batch)
+
+            await self.progress.update(
+                job_id=job_id, processed=batch_end, total=total_extracted,
+                status=JobStatus.NORMALIZING,
+                current_step=f"Normalized {batch_end}/{total_extracted} products",
+            )
+
+            if self.ingestor and normalized_batch:
+                total_ingested += await self.ingestor.ingest(normalized_batch)
+
+        logger.info("Feed import normalized %d, ingested %d products", total_normalized, total_ingested)
+
+        # Mark complete
+        await self.progress.update(
+            job_id=job_id, processed=total_normalized, total=total_normalized,
+            status=JobStatus.COMPLETED,
+            current_step="Feed import completed successfully",
+        )
+        await self.progress.set_metadata(
+            job_id,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+            products_count=total_normalized,
+        )
+
+        return {
+            "platform": Platform.GENERIC.value,
+            "total_extracted": total_extracted,
+            "total_normalized": total_normalized,
+            "total_ingested": total_ingested,
+            "extraction_tier": ExtractionTier.GOOGLE_FEED.value,
+            "coverage_percentage": (total_normalized / total_extracted * 100) if total_extracted else 0.0,
+            "urls_failed": 0,
+        }
 
     async def _run_inner(self, job_id: str, shop_url: str, max_urls: int | None = None) -> dict:
         """Inner pipeline logic wrapped by run() with timeout."""

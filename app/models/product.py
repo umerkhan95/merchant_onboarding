@@ -116,3 +116,36 @@ class Product(BaseModel):
             ]
         }
     }
+
+
+class ProductUpdate(BaseModel):
+    """Partial update model for merchant-editable product fields."""
+
+    gtin: str | None = Field(None, description="GTIN/EAN/UPC barcode identifier")
+    brand: str | None = Field(None, description="Product brand/vendor name")
+    mpn: str | None = Field(None, description="Manufacturer part number")
+    condition: str | None = Field(None, description="Product condition (NEW, REFURBISHED, USED)")
+    category_path: list[str] | None = Field(None, description="Category breadcrumb hierarchy")
+    description: str | None = Field(None, description="Product description")
+
+    @field_validator("condition")
+    @classmethod
+    def validate_condition(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.upper().strip()
+        if v not in ("NEW", "REFURBISHED", "USED"):
+            msg = "condition must be one of: NEW, REFURBISHED, USED"
+            raise ValueError(msg)
+        return v
+
+
+class MerchantSettings(BaseModel):
+    """Persistent merchant settings for delivery, shipping, and payment."""
+
+    shop_id: str = Field(..., description="Shop/merchant identifier")
+    delivery_time: str = Field("", description="Delivery time (e.g. '1-3 working days')")
+    delivery_costs: str = Field("", description="Delivery costs (e.g. '4.95' or 'DHL:4.95;DPD:5.95')")
+    payment_costs: str = Field("", description="Payment costs (e.g. '0.00' or 'PayPal:0.35')")
+    brand_fallback: str = Field("", description="Fallback brand name when product has no vendor")
+    default_condition: str = Field("NEW", description="Default condition for products without one")

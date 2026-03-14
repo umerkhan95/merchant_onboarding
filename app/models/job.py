@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from app.models.enums import JobStatus
 
@@ -13,13 +13,24 @@ from app.models.enums import JobStatus
 class OnboardingRequest(BaseModel):
     """Onboarding job creation request."""
 
-    url: HttpUrl = Field(..., description="Store URL to onboard")
+    url: HttpUrl | None = Field(None, description="Store URL to onboard")
+    feed_url: HttpUrl | None = Field(None, description="Google Shopping feed URL (XML or CSV)")
     max_urls: int | None = Field(None, description="Cap discovered URLs (for testing)", ge=1)
 
-    @field_validator("url")
+    @model_validator(mode="after")
+    def require_url_or_feed(self) -> OnboardingRequest:
+        """At least one of url or feed_url must be provided."""
+        if not self.url and not self.feed_url:
+            raise ValueError("Either 'url' or 'feed_url' must be provided")
+        return self
+
+    @field_validator("url", "feed_url")
     @classmethod
-    def validate_url_security(cls, v: HttpUrl) -> HttpUrl:
+    def validate_url_security(cls, v: HttpUrl | None) -> HttpUrl | None:
         """Validate URL is safe: reject private IPs and non-HTTP(S) schemes."""
+        if v is None:
+            return v
+
         parsed = urlparse(str(v))
 
         # Validate scheme is HTTP or HTTPS (HttpUrl already enforces this, but double-check)
@@ -57,7 +68,7 @@ class OnboardingRequest(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {"url": "https://example-store.myshopify.com"},
-                {"url": "https://www.boutique-example.com"},
+                {"feed_url": "https://example.com/feeds/google-shopping.xml"},
             ]
         }
     }

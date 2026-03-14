@@ -58,6 +58,10 @@ class ProductNormalizer:
         normalized_data["platform"] = platform
         normalized_data["raw_data"] = raw if settings.store_raw_data else {}
 
+        # Default condition to NEW when not extracted (most products are new)
+        if not normalized_data.get("condition"):
+            normalized_data["condition"] = "NEW"
+
         # Validate and create Product
         try:
             product = Product(**normalized_data)
@@ -504,11 +508,86 @@ class ProductNormalizer:
             "category_path": list(raw.get("tags") or []),
         }
 
+    def _normalize_google_feed(self, raw: dict, shop_url: str) -> dict | None:
+        """Normalize Google Shopping feed item format.
+
+        Raw dict has: id, title, description, link, price, currency, sale_price,
+        gtin, brand, image_link, additional_image_link, availability, condition,
+        product_type, mpn (all from GoogleFeedExtractor).
+        """
+        title = (raw.get("title") or "").strip()
+        if not title:
+            return None
+
+        # Parse price
+        try:
+            price = Decimal(raw["price"]) if raw.get("price") else Decimal("0")
+        except (InvalidOperation, ValueError):
+            price = Decimal("0")
+
+        # Google semantics: sale_price is the discounted price, price is original.
+        # When sale_price exists, it becomes our price, and price becomes compare_at.
+        compare_at_price = None
+        if raw.get("sale_price"):
+            try:
+                sale = Decimal(raw["sale_price"])
+                if sale > 0 and price > 0 and sale < price:
+                    compare_at_price = price
+                    price = sale
+            except (InvalidOperation, ValueError):
+                pass
+
+        # Availability
+        avail = (raw.get("availability") or "").lower().replace(" ", "_")
+        in_stock = "in_stock" in avail if avail else True
+
+        # Condition
+        condition_raw = (raw.get("condition") or "").lower()
+        condition = None
+        if "new" in condition_raw:
+            condition = "NEW"
+        elif "refurbished" in condition_raw:
+            condition = "REFURBISHED"
+        elif "used" in condition_raw:
+            condition = "USED"
+
+        # Category path from product_type: "Home > Kitchen > Appliances"
+        product_type = raw.get("product_type", "")
+        category_path = [
+            c.strip() for c in re.split(r"\s*>\s*", product_type) if c.strip()
+        ] if product_type else []
+
+        return {
+            "external_id": raw.get("id", ""),
+            "title": title,
+            "description": HTMLSanitizer.sanitize(raw.get("description", "")),
+            "price": price,
+            "compare_at_price": compare_at_price,
+            "currency": raw.get("currency") or "EUR",
+            "image_url": raw.get("image_link", ""),
+            "product_url": raw.get("link", "") or shop_url,
+            "sku": raw.get("id", ""),
+            "gtin": self._validate_gtin(raw.get("gtin")),
+            "mpn": raw.get("mpn") or None,
+            "vendor": raw.get("brand") or None,
+            "product_type": category_path[0] if category_path else None,
+            "in_stock": in_stock,
+            "condition": condition,
+            "variants": [],
+            "tags": [],
+            "additional_images": raw.get("additional_image_link", []),
+            "category_path": category_path,
+        }
+
     def _normalize_generic(self, raw: dict, shop_url: str) -> dict | None:
         """Normalize generic/unknown format using detection heuristics.
 
-        Tries to detect Schema.org JSON-LD, OpenGraph, or direct field mapping.
+        Tries to detect Google feed, Schema.org JSON-LD, OpenGraph, or direct field mapping.
         """
+        # Google Shopping feed
+        if raw.get("_source") == "google_feed":
+            return self._normalize_google_feed(raw, shop_url)
+
         # Try Schema.org JSON-LD — route if has "offers" or looks like a Product type
         is_schema_org = "name" in raw and (
             "offers" in raw

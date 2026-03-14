@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
+  <channel>
+    <title>Test Store Feed</title>
+    <link>https://test-store.com</link>
+    <description>Google Shopping Feed</description>
+
+    <item>
+      <g:id>PROD-001</g:id>
+      <title>Weber Spirit II E-310 Gas Grill</title>
+      <description>3-burner gas grill with GS4 grilling system</description>
+      <link>https://test-store.com/grills/spirit-ii-e310</link>
+      <g:price>449.99 EUR</g:price>
+      <g:gtin>4012345678901</g:gtin>
+      <g:brand>Weber</g:brand>
+      <g:image_link>https://test-store.com/media/spirit-ii.jpg</g:image_link>
+      <g:additional_image_link>https://test-store.com/media/spirit-ii-side.jpg</g:additional_image_link>
+      <g:additional_image_link>https://test-store.com/media/spirit-ii-top.jpg</g:additional_image_link>
+      <g:availability>in_stock</g:availability>
+      <g:condition>new</g:condition>
+      <g:product_type>Home &amp; Garden > Outdoor > Grills</g:product_type>
+      <g:mpn>44010001</g:mpn>
+    </item>
+
+    <item>
+      <g:id>PROD-002</g:id>
+      <title>Cast Iron Griddle 12 Inch</title>
+      <description>Pre-seasoned cast iron griddle</description>
+      <link>https://test-store.com/accessories/griddle-12</link>
+      <g:price>59.99 EUR</g:price>
+      <g:sale_price>39.99 EUR</g:sale_price>
+      <g:brand>Weber</g:brand>
+      <g:image_link>https://test-store.com/media/griddle.jpg</g:image_link>
+      <g:availability>in_stock</g:availability>
+      <g:condition>new</g:condition>
+      <g:product_type>Home &amp; Garden > Outdoor > Accessories</g:product_type>
+    </item>
+
+    <item>
+      <g:id>PROD-003</g:id>
+      <title>Premium Wood Pellets 20lb</title>
+      <description>Hardwood blend pellets for smoking</description>
+      <link>https://test-store.com/fuel/wood-pellets-20lb</link>
+      <g:price>24.99 USD</g:price>
+      <g:gtin>0012345678905</g:gtin>
+      <g:brand>Weber</g:brand>
+      <g:image_link>https://test-store.com/media/pellets.jpg</g:image_link>
+      <g:availability>out_of_stock</g:availability>
+      <g:condition>new</g:condition>
+    </item>
+
+    <item>
+      <g:id>PROD-004</g:id>
+      <title>Refurbished Genesis EX-335</title>
+      <description>Certified refurbished 3-burner grill</description>
+      <link>https://test-store.com/grills/genesis-ex335-refurb</link>
+      <g:price>899.00 EUR</g:price>
+      <g:gtin>4012345678918</g:gtin>
+      <g:brand>Weber</g:brand>
+      <g:image_link>https://test-store.com/media/genesis-refurb.jpg</g:image_link>
+      <g:availability>in_stock</g:availability>
+      <g:condition>refurbished</g:condition>
+      <g:product_type>Home &amp; Garden > Outdoor > Grills</g:product_type>
+      <g:mpn>35410001</g:mpn>
+    </item>
+
+    <item>
+      <g:id>PROD-005</g:id>
+      <title></title>
+      <description>Item with no title should be skipped</description>
+      <link>https://test-store.com/unknown</link>
+      <g:price>9.99 EUR</g:price>
+    </item>
+
+  </channel>
+</rss>

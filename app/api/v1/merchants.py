@@ -1,21 +1,39 @@
-"""Merchant profile API endpoints."""
+"""Merchant profile and settings API endpoints."""
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 import redis.asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from app.api.deps import get_db, get_redis, limiter, require_api_key, verify_api_key
 from app.config import settings
 from app.db.bulk_ingestor import BulkIngestor
+from app.db.queries import SELECT_MERCHANT_SETTINGS, SELECT_MERCHANT_SETTINGS_BY_DOMAIN, UPSERT_MERCHANT_SETTINGS
 from app.services.url_normalizer import normalize_shop_url
+
+if TYPE_CHECKING:
+    from app.db.supabase_client import DatabaseClient
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/merchants", tags=["merchants"])
+
+
+class MerchantSettingsUpdate(BaseModel):
+    """Request body for updating merchant settings."""
+
+    delivery_time: str = Field("", description="Delivery time (e.g. '1-3 working days')")
+    delivery_costs: str = Field("", description="Delivery costs (e.g. '4.95' or 'DHL:4.95;DPD:5.95')")
+    payment_costs: str = Field("", description="Payment costs (e.g. '0.00' or 'PayPal:0.35')")
+    brand_fallback: str = Field("", description="Fallback brand name when product has no vendor")
+    default_condition: str = Field("NEW", description="Default condition for products without one")
 
 
 def _parse_jsonb_fields(row: dict) -> dict:
@@ -68,6 +86,73 @@ async def get_merchant_profile(
         )
 
     return _parse_jsonb_fields(profile)
+
+
+def _settings_row_to_dict(row: Any) -> dict[str, Any]:
+    """Convert merchant_settings row to dict."""
+    d = dict(row)
+    for k, v in d.items():
+        if isinstance(v, Decimal):
+            d[k] = float(v)
+        elif isinstance(v, datetime):
+            d[k] = v.isoformat()
+    return d
+
+
+@router.get("/settings", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
+async def get_merchant_settings(
+    request: Request,
+    shop_id: str = Query(..., description="Shop/merchant identifier"),
+    db: DatabaseClient | None = Depends(get_db),
+) -> dict[str, Any]:
+    """Get stored merchant settings (delivery, shipping, payment)."""
+    if db is None:
+        return {"shop_id": shop_id, "settings": None}
+
+    shop_id = normalize_shop_url(shop_id)
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow(SELECT_MERCHANT_SETTINGS, shop_id)
+        if row is None:
+            from urllib.parse import urlparse
+            parsed = urlparse(shop_id if "://" in shop_id else f"https://{shop_id}")
+            domain = (parsed.hostname or shop_id).removeprefix("www.")
+            row = await conn.fetchrow(SELECT_MERCHANT_SETTINGS_BY_DOMAIN, domain)
+
+    if row is None:
+        return {"shop_id": shop_id, "settings": None}
+
+    return {"shop_id": shop_id, "settings": _settings_row_to_dict(row)}
+
+
+@router.put("/settings", dependencies=[require_api_key])
+@limiter.limit(settings.rate_limit_default)
+async def update_merchant_settings(
+    request: Request,
+    shop_id: str = Query(..., description="Shop/merchant identifier"),
+    body: MerchantSettingsUpdate = ...,
+    db: DatabaseClient | None = Depends(get_db),
+) -> dict[str, Any]:
+    """Create or update merchant settings (delivery, shipping, payment).
+
+    These settings are used by the idealo CSV exporter and PWS client.
+    """
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    shop_id = normalize_shop_url(shop_id)
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            UPSERT_MERCHANT_SETTINGS,
+            shop_id,
+            body.delivery_time,
+            body.delivery_costs,
+            body.payment_costs,
+            body.brand_fallback,
+            body.default_condition,
+        )
+
+    return {"shop_id": shop_id, "settings": _settings_row_to_dict(row)}
 
 
 @router.delete("/{shop_id:path}", dependencies=[require_api_key])

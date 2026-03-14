@@ -54,6 +54,23 @@ POST /api/v1/onboard {url}
 
 ## Extraction Strategy (tiered fallback chain)
 
+### Tier 0: Google Shopping Feed (fastest path, no crawling)
+
+When the merchant provides a `feed_url` (Google Shopping feed XML or CSV), the pipeline
+skips detection, discovery, and the extraction probe chain entirely. One HTTP GET, parse
+the feed, normalize, ingest. The feed contains complete product data with GTINs, prices,
+images — no browser, no credentials, no rate limiting.
+
+- **XML**: RSS 2.0 with `g:` namespace (`xmlns:g="http://base.google.com/ns/1.0"`)
+- **CSV/TSV**: Google Merchant Center column headers (id, title, price, gtin, etc.)
+- `GoogleFeedExtractor` parses both formats, returns raw product dicts
+- `_normalize_google_feed` in ProductNormalizer maps to unified Product schema
+- `g:sale_price` / `g:price` semantics: sale_price becomes price, price becomes compare_at
+- defusedxml for XML parsing (security), MAX_RESPONSE_SIZE enforced
+- `ExtractionTier.GOOGLE_FEED`, `Platform.GENERIC`
+
+### Standard extraction (when no feed_url provided)
+
 The pipeline probes each tier on a single sample URL. If the probe returns products
 with quality score >= 0.3 (via QualityScorer), it commits to that tier for all URLs.
 Partial results from failed probes are merged into the winning tier's output.
@@ -199,7 +216,7 @@ queued -> detecting -> discovering -> extracting -> verifying -> normalizing -> 
 ## API Endpoints
 
 ```
-POST   /api/v1/onboard              -> 202 Accepted + {job_id, progress_url}
+POST   /api/v1/onboard              -> 202 Accepted + {job_id, progress_url} (accepts url OR feed_url)
 GET    /api/v1/onboard/{job_id}     -> Job status + progress
 GET    /api/v1/onboard/{job_id}/progress -> SSE stream
 GET    /api/v1/products?shop_id=X   -> Paginated product list
@@ -229,6 +246,12 @@ POST   /api/v1/auth/magento/manual          -> Submit Magento access_token (manu
 DELETE /api/v1/auth/magento/disconnect?shop=X -> Revoke Magento connection
 GET    /api/v1/auth/connections     -> List all OAuth connections
 GET    /api/v1/auth/connections/{domain} -> Connection status for a shop
+PATCH  /api/v1/products/{id}        -> Update product fields (gtin, brand, condition, etc.)
+POST   /api/v1/products/bulk-update -> CSV upload for bulk GTIN/brand/MPN updates
+GET    /api/v1/products/completeness -> Per-product completeness scores + shop summary
+GET    /api/v1/merchants/settings   -> Get stored merchant settings (delivery, costs)
+PUT    /api/v1/merchants/settings   -> Create/update merchant settings
+GET    /api/v1/exports/idealo/validate -> Pre-export validation check
 GET    /health                       -> Health check
 GET    /readiness                    -> Readiness check
 ```
@@ -288,14 +311,14 @@ merchant_onboarding/
 |   |       +-- products.py           # GET /products
 |   |       +-- dlq.py                # GET /dlq, POST /dlq/{id}/retry
 |   |       +-- analytics.py          # GET /analytics
-|   |       +-- exports.py           # GET /exports/idealo/csv
+|   |       +-- exports.py           # GET /exports/idealo/csv, GET /exports/idealo/validate
 |   |       +-- auth.py              # OAuth endpoints (BigCommerce + Shopify + WooCommerce + Shopware + Magento connect/callback/disconnect, connections)
 |   |       +-- magento_auth.py     # Magento 2 OAuth 1.0a callback flow + manual token entry
 |       +-- shopware_auth.py    # Shopware 6 OAuth (manual client_credentials entry)
 |   |       +-- shopify_auth.py      # Shopify OAuth sub-router (HMAC-SHA256, CSRF nonce, strict domain validation)
 |   |       +-- woocommerce_auth.py  # WooCommerce auto-auth sub-router (key exchange, CSRF nonce, credential verification)
 |   +-- models/
-|   |   +-- product.py                # Product Pydantic model (unified schema)
+|   |   +-- product.py                # Product, ProductUpdate, MerchantSettings Pydantic models
 |   |   +-- job.py                    # OnboardingJob model (request/response/status)
 |   |   +-- enums.py                  # Platform, JobStatus, ExtractionTier enums
 |   |   +-- analytics.py              # Analytics response models
@@ -325,6 +348,7 @@ merchant_onboarding/
 |   |   +-- magento_admin_extractor.py # Magento 2 Admin API via Integration token (EAN from custom attributes)
 |   |   +-- bigcommerce_admin_extractor.py # BigCommerce Admin API V3 via OAuth (GTIN/UPC first-class)
 |   |   +-- shopware_admin_extractor.py # Shopware 6 Admin API via OAuth client_credentials (EAN first-class, 10min token refresh)
+|   |   +-- google_feed_extractor.py   # Google Shopping feed parser (XML RSS 2.0 + CSV/TSV)
 |   |   +-- unified_crawl_extractor.py # Single crawl: JSON-LD + OG + markdown price + media (replaces separate Schema.org/OG probes)
 |   |   +-- markdown_price_extractor.py # Regex-based price/title extraction from rendered markdown
 |   |   +-- schema_org_extractor.py   # JSON-LD parsing (static methods reused by UnifiedCrawl)
@@ -418,6 +442,7 @@ merchant_onboarding/
 | `BigCommerceAdminExtractor` | Fetches BigCommerce Admin API V3 via OAuth. UPC/GTIN first-class. Brand resolution via cache. |
 | `ShopwareAdminExtractor` | Fetches Shopware 6 Admin API via client_credentials. EAN first-class. Auto-refreshes 10min bearer tokens. |
 | `OAuthStore` | Encrypted OAuth token CRUD (Fernet). Supports OAuth 2.0 + 1.0a fields. |
+| `GoogleFeedExtractor` | Parses Google Shopping feed URL (XML or CSV/TSV). One HTTP GET, no browser. |
 | `UnifiedCrawlExtractor` | Single crawl extracting JSON-LD + OG + markdown price + media. httpx fast path, browser fallback. |
 | `MarkdownPriceExtractor` | Regex-based price/title/currency extraction from rendered markdown. No LLM. |
 | `SchemaOrgExtractor` | JSON-LD parsing. Static methods reused by UnifiedCrawl; `extract(url)` no longer called by pipeline. |
@@ -443,6 +468,8 @@ merchant_onboarding/
 | `Pipeline` | Orchestrator ONLY. Calls components in order. Contains no business logic itself. |
 | `IdealoCSVExporter` | Converts Product list to idealo-compatible TSV feed. No DB access. |
 | `IdealoPWSClient` | Pushes offers to idealo PWS 2.0 REST API. OAuth2 auth, rate-aware. |
+| `ProductUpdate` | Pydantic model for partial product updates (GTIN, brand, condition, category, description). |
+| `MerchantSettings` | Pydantic model for persistent delivery/shipping/payment settings per shop. |
 
 ## crawl4ai Usage
 

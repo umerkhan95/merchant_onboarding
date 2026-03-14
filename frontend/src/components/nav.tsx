@@ -10,6 +10,7 @@ const links = [
   { href: "/jobs", label: "Jobs", icon: "#" },
   { href: "/stores", label: "Stores", icon: "@" },
   { href: "/products", label: "Products", icon: "=" },
+  { href: "/settings", label: "Settings", icon: "*" },
   { href: "/analytics", label: "Analytics", icon: "~" },
 ];
 

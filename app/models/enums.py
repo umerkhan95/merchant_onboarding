@@ -46,4 +46,5 @@ class ExtractionTier(StrEnum):
     WOOCOMMERCE_API = "woocommerce_api"
     SHOPWARE_API = "shopware_api"
     MAGENTO_API = "magento_api"
+    GOOGLE_FEED = "google_feed"
     LLM = "llm"

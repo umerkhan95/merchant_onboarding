@@ -34,6 +34,7 @@ async def _run_pipeline_direct(
     redis_client: redis.asyncio.Redis,
     db: DatabaseClient | None,
     max_urls: int | None = None,
+    feed_url: str | None = None,
 ) -> None:
     """Run the pipeline directly (no Celery) as an async background task."""
     from app.config import settings
@@ -87,7 +88,7 @@ async def _run_pipeline_direct(
     )
 
     try:
-        await pipeline.run(job_id=job_id, shop_url=shop_url, max_urls=max_urls)
+        await pipeline.run(job_id=job_id, shop_url=shop_url, max_urls=max_urls, feed_url=feed_url)
     except Exception:
         logger.exception("Direct pipeline failed for job %s", job_id)
 
@@ -100,13 +101,25 @@ async def create_onboarding_job(
     redis: redis.asyncio.Redis = Depends(get_redis),
     db: DatabaseClient | None = Depends(get_db),
 ) -> OnboardingResponse:
-    """Accept a shop URL and queue an onboarding job.
+    """Accept a shop URL or feed URL and queue an onboarding job.
 
     Returns 202 Accepted with a job_id for tracking progress.
-    Validates the URL against SSRF before dispatching.
+    Validates URLs against SSRF before dispatching.
     """
-    # SSRF validation: resolve hostname and check for private IPs / DNS rebinding
-    await URLValidator.validate_or_raise_async(str(body.url))
+    shop_url = str(body.url) if body.url else ""
+    feed_url = str(body.feed_url) if body.feed_url else None
+
+    # SSRF validation
+    if shop_url:
+        await URLValidator.validate_or_raise_async(shop_url)
+    if feed_url:
+        await URLValidator.validate_or_raise_async(feed_url)
+
+    # Derive shop_url from feed URL domain if not provided
+    if not shop_url and feed_url:
+        from urllib.parse import urlparse as _urlparse
+        parsed = _urlparse(feed_url)
+        shop_url = f"https://{parsed.netloc}" if parsed.netloc else feed_url
 
     job_id = f"job_{uuid.uuid4().hex[:12]}"
 
@@ -119,21 +132,25 @@ async def create_onboarding_job(
         status=JobStatus.QUEUED,
         current_step="Job queued for processing",
     )
-    await tracker.set_metadata(job_id, shop_url=str(body.url))
+    await tracker.set_metadata(job_id, shop_url=shop_url)
 
     # Try Celery first, fall back to direct execution
     dispatched = False
     try:
         from app.workers.tasks import run_onboarding_pipeline
 
-        run_onboarding_pipeline.delay(job_id=job_id, shop_url=str(body.url), max_urls=body.max_urls)
+        run_onboarding_pipeline.delay(
+            job_id=job_id, shop_url=shop_url, max_urls=body.max_urls, feed_url=feed_url,
+        )
         dispatched = True
         logger.info("Job %s dispatched to Celery", job_id)
     except Exception:
         logger.info("Celery unavailable, running pipeline directly for job %s", job_id)
 
     if not dispatched:
-        asyncio.create_task(_run_pipeline_direct(job_id, str(body.url), redis, db, max_urls=body.max_urls))
+        asyncio.create_task(
+            _run_pipeline_direct(job_id, shop_url, redis, db, max_urls=body.max_urls, feed_url=feed_url)
+        )
 
     return OnboardingResponse(
         job_id=job_id,
