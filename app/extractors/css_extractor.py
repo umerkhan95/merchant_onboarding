@@ -29,8 +29,37 @@ class CSSExtractor(BaseExtractor):
         self.schema = schema
         self.stealth_level = stealth_level
 
+    @staticmethod
+    def _parse_extracted_content(url: str, result) -> list[dict]:
+        """Parse extracted content from a crawl result into product dicts."""
+        if not result.success:
+            logger.error("Crawl failed for %s: %s", url, result.error_message)
+            return []
+
+        if not result.extracted_content:
+            logger.warning("No content extracted from %s", url)
+            return []
+
+        try:
+            extracted_data = json.loads(result.extracted_content)
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse extracted JSON from %s: %s", url, e)
+            return []
+
+        if isinstance(extracted_data, dict):
+            return [extracted_data] if extracted_data else []
+        elif isinstance(extracted_data, list):
+            return extracted_data
+        else:
+            logger.warning("Unexpected extracted data type from %s: %s", url, type(extracted_data))
+            return []
+
     async def _crawl_single(self, url: str, stealth_level: StealthLevel) -> list[dict]:
-        """Core crawl logic for a single URL at a given stealth level."""
+        """Core crawl logic for a single URL at a given stealth level.
+
+        Creates its own browser instance. Used as fallback when the shared-browser
+        extract() path fails.
+        """
         try:
             browser_config = get_browser_config(stealth_level)
             extraction_strategy = JsonCssExtractionStrategy(self.schema, verbose=False)
@@ -48,45 +77,55 @@ class CSSExtractor(BaseExtractor):
                     url=url,
                     config=crawler_config,
                 )
-
-                if not result.success:
-                    logger.error("Crawl failed for %s: %s", url, result.error_message)
-                    return []
-
-                if not result.extracted_content:
-                    logger.warning("No content extracted from %s", url)
-                    return []
-
-                try:
-                    extracted_data = json.loads(result.extracted_content)
-                except json.JSONDecodeError as e:
-                    logger.error("Failed to parse extracted JSON from %s: %s", url, e)
-                    return []
-
-                if isinstance(extracted_data, dict):
-                    return [extracted_data] if extracted_data else []
-                elif isinstance(extracted_data, list):
-                    return extracted_data
-                else:
-                    logger.warning("Unexpected extracted data type from %s: %s", url, type(extracted_data))
-                    return []
+                return self._parse_extracted_content(url, result)
 
         except Exception as e:
             logger.exception("CSS extraction failed for %s: %s", url, e)
             return []
 
     async def extract(self, url: str) -> ExtractorResult:
-        """Extract product data using crawl4ai JsonCssExtractionStrategy with stealth escalation."""
+        """Extract product data using crawl4ai JsonCssExtractionStrategy with stealth escalation.
+
+        Creates ONE browser instance and retries with different CrawlerRunConfig
+        params for each stealth level, avoiding the cost of spawning a new
+        browser per escalation step.
+        """
         start_idx = self._ESCALATION_ORDER.index(self.stealth_level)
+        levels = self._ESCALATION_ORDER[start_idx:]
 
-        for level in self._ESCALATION_ORDER[start_idx:]:
-            if level != self.stealth_level:
-                logger.info("Escalating stealth level to %s for %s", level.value, url)
+        if not levels:
+            return ExtractorResult(products=[], complete=False, error="No stealth levels to try")
 
-            products = await self._crawl_single(url, level)
+        # Use the highest stealth level for the browser config (superset of lower levels)
+        max_level = levels[-1]
+        browser_config = get_browser_config(max_level)
+        crawler_strategy = get_crawler_strategy(max_level, browser_config)
 
-            if products:
-                return ExtractorResult(products=products)
+        try:
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
+                for level in levels:
+                    if level != self.stealth_level:
+                        logger.info("Escalating stealth level to %s for %s", level.value, url)
+
+                    extraction_strategy = JsonCssExtractionStrategy(self.schema, verbose=False)
+                    crawler_config = get_crawl_config(
+                        stealth_level=level,
+                        extraction_strategy=extraction_strategy,
+                    )
+
+                    try:
+                        result = await crawler.arun(url=url, config=crawler_config)
+                        products = self._parse_extracted_content(url, result)
+                        if products:
+                            return ExtractorResult(products=products)
+                    except Exception as e:
+                        logger.warning("CSS crawl (%s) error for %s: %s", level.value, url, e)
+                        continue
+        except Exception as e:
+            logger.exception("CSS browser startup failed for %s: %s", url, e)
 
         return ExtractorResult(products=[], complete=False, error="All stealth levels exhausted with 0 products")
 
