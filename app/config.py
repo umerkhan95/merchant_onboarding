@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     rate_limit_onboard: str = "2/minute"
 
     # Crawling
+    crawl_locale: str = "de-DE"
+    crawl_timezone: str = "Europe/Berlin"
     max_concurrent_browsers: int = 10
     memory_threshold_percent: float = 70.0
     crawl_batch_size: int = 50
@@ -64,6 +66,10 @@ class Settings(BaseSettings):
     oauth_encryption_key: str = ""  # Fernet key for encrypting OAuth tokens at rest
     jwt_secret_key: str = "change-me-in-production"  # JWT signing key for merchant sessions
     jwt_expiry_hours: int = 24
+    jwt_access_expiry_minutes: int = 15
+    jwt_refresh_expiry_days: int = 30
+    account_lockout_attempts: int = 5
+    account_lockout_minutes: int = 15
     bigcommerce_client_id: str = ""
     bigcommerce_client_secret: str = ""
     bigcommerce_callback_url: str = "http://localhost:8000/api/v1/auth/bigcommerce/callback"

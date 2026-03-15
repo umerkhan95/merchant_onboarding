@@ -14,10 +14,28 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import v1_router
 from app.config import settings
-from app.db.queries import ALTER_PRODUCTS_ADD_IDEALO_FIELDS, CREATE_OAUTH_CONNECTIONS_TABLE, CREATE_PRODUCTS_TABLE, CREATE_MERCHANT_PROFILES_TABLE
+from app.db.queries import (
+    ALTER_PRODUCTS_ADD_IDEALO_FIELDS,
+    CREATE_API_KEYS_TABLE,
+    CREATE_AUDIT_LOG_TABLE,
+    CREATE_MERCHANT_ACCOUNTS_TABLE,
+    CREATE_MERCHANT_PROFILES_TABLE,
+    CREATE_MERCHANT_ROLES_TABLE,
+    CREATE_MERCHANT_SETTINGS_TABLE,
+    CREATE_OAUTH_CONNECTIONS_TABLE,
+    CREATE_PERMISSIONS_TABLE,
+    CREATE_PRODUCTS_TABLE,
+    CREATE_REFRESH_TOKENS_TABLE,
+    CREATE_ROLE_PERMISSIONS_TABLE,
+    CREATE_ROLES_TABLE,
+    SEED_PERMISSIONS,
+    SEED_ROLE_PERMISSIONS,
+    SEED_ROLES,
+)
 from app.db.supabase_client import DatabaseClient
 from app.exceptions.handlers import register_exception_handlers
 from app.infra.perf_middleware import PerfMiddleware
+from app.infra.security_headers import SecurityHeadersMiddleware
 from app.api.deps import limiter
 
 logger = logging.getLogger(__name__)
@@ -36,10 +54,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             db = DatabaseClient(settings.database_url)
             await db.connect()
             async with db.pool.acquire() as conn:
+                # Non-RBAC tables (no inter-dependencies)
                 await conn.execute(CREATE_PRODUCTS_TABLE)
                 await conn.execute(ALTER_PRODUCTS_ADD_IDEALO_FIELDS)
                 await conn.execute(CREATE_MERCHANT_PROFILES_TABLE)
                 await conn.execute(CREATE_OAUTH_CONNECTIONS_TABLE)
+                await conn.execute(CREATE_MERCHANT_SETTINGS_TABLE)
+                # RBAC tables + seed data in a transaction so partial seed
+                # failures don't leave the schema in an inconsistent state.
+                # CREATE TABLE IF NOT EXISTS is idempotent, and all SEED
+                # statements use ON CONFLICT DO NOTHING, so re-runs are safe.
+                async with conn.transaction():
+                    # 1. Independent tables (no FKs to other RBAC tables)
+                    await conn.execute(CREATE_MERCHANT_ACCOUNTS_TABLE)
+                    await conn.execute(CREATE_ROLES_TABLE)
+                    await conn.execute(CREATE_PERMISSIONS_TABLE)
+                    # 2. Seed reference data
+                    await conn.execute(SEED_ROLES)
+                    await conn.execute(SEED_PERMISSIONS)
+                    # 3. FK-dependent tables
+                    await conn.execute(CREATE_ROLE_PERMISSIONS_TABLE)
+                    await conn.execute(SEED_ROLE_PERMISSIONS)
+                    await conn.execute(CREATE_MERCHANT_ROLES_TABLE)
+                    await conn.execute(CREATE_API_KEYS_TABLE)
+                    await conn.execute(CREATE_REFRESH_TOKENS_TABLE)
+                    await conn.execute(CREATE_AUDIT_LOG_TABLE)
             logger.info("PostgreSQL connected and tables ensured")
             break
         except Exception:
@@ -81,7 +120,11 @@ def create_app() -> FastAPI:
         allow_headers=["X-API-Key", "Authorization", "Content-Type"],
     )
 
+    if settings.jwt_secret_key == "change-me-in-production":
+        logger.warning("JWT_SECRET_KEY is using default value — change in production!")
+
     app.state.limiter = limiter
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(PerfMiddleware)
     app.include_router(v1_router, prefix="/api/v1")
 

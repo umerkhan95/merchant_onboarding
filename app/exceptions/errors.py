@@ -22,6 +22,11 @@ class AuthenticationError(AppError):
         super().__init__(detail=detail, status_code=401)
 
 
+class ForbiddenError(AppError):
+    def __init__(self, detail: str = "Insufficient permissions") -> None:
+        super().__init__(detail=detail, status_code=403)
+
+
 class SSRFError(AppError):
     def __init__(self, detail: str = "URL validation failed") -> None:
         super().__init__(detail=detail, status_code=400)

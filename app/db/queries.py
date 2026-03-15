@@ -461,3 +461,267 @@ WHERE shop_id LIKE '%' || $1 || '%';
 SELECT_MERCHANT_SETTINGS_BY_DOMAIN = """
 SELECT * FROM merchant_settings WHERE shop_id LIKE '%' || $1 || '%';
 """
+
+# --- RBAC & Auth Tables ---
+
+CREATE_MERCHANT_ACCOUNTS_TABLE = """
+CREATE TABLE IF NOT EXISTS merchant_accounts (
+    id UUID PRIMARY KEY,
+    email_hash TEXT NOT NULL UNIQUE,
+    email_encrypted BYTEA NOT NULL,
+    password_hash TEXT NOT NULL,
+    account_status VARCHAR(20) NOT NULL DEFAULT 'active',
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_merchant_accounts_email_hash ON merchant_accounts(email_hash);
+"""
+
+CREATE_ROLES_TABLE = """
+CREATE TABLE IF NOT EXISTS roles (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE,
+    description TEXT DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+SEED_ROLES = """
+INSERT INTO roles (name, description) VALUES
+    ('admin', 'Full system access'),
+    ('merchant', 'Standard merchant access'),
+    ('viewer', 'Read-only access')
+ON CONFLICT (name) DO NOTHING;
+"""
+
+CREATE_PERMISSIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS permissions (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+SEED_PERMISSIONS = """
+INSERT INTO permissions (code, description) VALUES
+    ('products:read', 'View products'),
+    ('products:write', 'Create/update products'),
+    ('products:delete', 'Delete products'),
+    ('exports:read', 'View/download exports'),
+    ('exports:write', 'Create exports'),
+    ('settings:read', 'View merchant settings'),
+    ('settings:write', 'Update merchant settings'),
+    ('oauth:read', 'View OAuth connections'),
+    ('oauth:write', 'Manage OAuth connections'),
+    ('onboard:write', 'Start onboarding jobs'),
+    ('onboard:read', 'View onboarding status'),
+    ('analytics:read', 'View analytics'),
+    ('api_keys:manage', 'Create/revoke API keys'),
+    ('admin:manage', 'Full admin access')
+ON CONFLICT (code) DO NOTHING;
+"""
+
+CREATE_ROLE_PERMISSIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, permission_id)
+);
+"""
+
+SEED_ROLE_PERMISSIONS = """
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r CROSS JOIN permissions p
+WHERE r.name = 'admin'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r CROSS JOIN permissions p
+WHERE r.name = 'merchant' AND p.code NOT IN ('admin:manage', 'products:delete')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r CROSS JOIN permissions p
+WHERE r.name = 'viewer' AND p.code IN ('products:read', 'exports:read', 'settings:read', 'oauth:read', 'onboard:read', 'analytics:read')
+ON CONFLICT DO NOTHING;
+"""
+
+CREATE_MERCHANT_ROLES_TABLE = """
+CREATE TABLE IF NOT EXISTS merchant_roles (
+    merchant_id UUID NOT NULL REFERENCES merchant_accounts(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (merchant_id, role_id)
+);
+"""
+
+CREATE_API_KEYS_TABLE = """
+CREATE TABLE IF NOT EXISTS api_keys (
+    id UUID PRIMARY KEY,
+    merchant_id UUID NOT NULL REFERENCES merchant_accounts(id) ON DELETE CASCADE,
+    key_hash TEXT NOT NULL UNIQUE,
+    key_prefix VARCHAR(12) NOT NULL,
+    name VARCHAR(100) NOT NULL DEFAULT '',
+    scopes TEXT DEFAULT '',
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_merchant ON api_keys(merchant_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+"""
+
+CREATE_REFRESH_TOKENS_TABLE = """
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id UUID PRIMARY KEY,
+    merchant_id UUID NOT NULL REFERENCES merchant_accounts(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    token_family UUID NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    user_agent TEXT DEFAULT '',
+    ip_address VARCHAR(45) DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_merchant ON refresh_tokens(merchant_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(token_family);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at)
+    WHERE revoked = FALSE;
+"""
+
+CREATE_AUDIT_LOG_TABLE = """
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    merchant_id UUID,
+    event_type VARCHAR(100) NOT NULL,
+    ip_address VARCHAR(45) DEFAULT '',
+    user_agent TEXT DEFAULT '',
+    details JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_merchant ON audit_log(merchant_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_event ON audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+"""
+
+# --- Merchant Account DML ---
+
+INSERT_MERCHANT_ACCOUNT = """
+INSERT INTO merchant_accounts (id, email_hash, email_encrypted, password_hash)
+VALUES ($1, $2, $3, $4)
+RETURNING id, account_status, created_at;
+"""
+
+SELECT_MERCHANT_BY_EMAIL_HASH = """
+SELECT * FROM merchant_accounts WHERE email_hash = $1;
+"""
+
+SELECT_MERCHANT_BY_ID = """
+SELECT * FROM merchant_accounts WHERE id = $1;
+"""
+
+UPDATE_MERCHANT_FAILED_LOGIN = """
+UPDATE merchant_accounts
+SET failed_login_attempts = failed_login_attempts + 1,
+    locked_until = CASE
+        WHEN failed_login_attempts + 1 >= $2
+        THEN NOW() + ($3 || ' minutes')::INTERVAL
+        ELSE locked_until
+    END,
+    updated_at = NOW()
+WHERE id = $1;
+"""
+
+RESET_MERCHANT_FAILED_LOGIN = """
+UPDATE merchant_accounts
+SET failed_login_attempts = 0, locked_until = NULL, updated_at = NOW()
+WHERE id = $1;
+"""
+
+# --- Merchant Roles DML ---
+
+INSERT_MERCHANT_ROLE = """
+INSERT INTO merchant_roles (merchant_id, role_id)
+SELECT $1, id FROM roles WHERE name = $2
+ON CONFLICT DO NOTHING;
+"""
+
+SELECT_MERCHANT_PERMISSIONS = """
+SELECT DISTINCT p.code
+FROM merchant_roles mr
+JOIN role_permissions rp ON rp.role_id = mr.role_id
+JOIN permissions p ON p.id = rp.permission_id
+WHERE mr.merchant_id = $1;
+"""
+
+# --- API Keys DML ---
+
+INSERT_API_KEY = """
+INSERT INTO api_keys (id, merchant_id, key_hash, key_prefix, name, scopes, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, key_prefix, name, scopes, expires_at, created_at;
+"""
+
+SELECT_API_KEY_BY_HASH = """
+SELECT ak.*, ma.account_status
+FROM api_keys ak
+JOIN merchant_accounts ma ON ma.id = ak.merchant_id
+WHERE ak.key_hash = $1 AND ak.revoked = FALSE
+  AND (ak.expires_at IS NULL OR ak.expires_at > NOW());
+"""
+
+SELECT_API_KEYS_BY_MERCHANT = """
+SELECT id, key_prefix, name, scopes, expires_at, last_used_at, revoked, created_at
+FROM api_keys
+WHERE merchant_id = $1
+ORDER BY created_at DESC;
+"""
+
+REVOKE_API_KEY = """
+UPDATE api_keys SET revoked = TRUE WHERE id = $1 AND merchant_id = $2;
+"""
+
+UPDATE_API_KEY_LAST_USED = """
+UPDATE api_keys SET last_used_at = NOW() WHERE id = $1;
+"""
+
+# --- Refresh Tokens DML ---
+
+INSERT_REFRESH_TOKEN = """
+INSERT INTO refresh_tokens (id, merchant_id, token_hash, token_family, expires_at, user_agent, ip_address)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+"""
+
+SELECT_REFRESH_TOKEN_BY_HASH = """
+SELECT * FROM refresh_tokens WHERE token_hash = $1;
+"""
+
+REVOKE_REFRESH_TOKEN = """
+UPDATE refresh_tokens SET revoked = TRUE WHERE id = $1;
+"""
+
+REVOKE_REFRESH_TOKEN_FAMILY = """
+UPDATE refresh_tokens SET revoked = TRUE WHERE token_family = $1;
+"""
+
+REVOKE_ALL_MERCHANT_REFRESH_TOKENS = """
+UPDATE refresh_tokens SET revoked = TRUE WHERE merchant_id = $1;
+"""
+
+SELECT_ACTIVE_SESSIONS = """
+SELECT id, token_family, user_agent, ip_address, created_at, expires_at
+FROM refresh_tokens
+WHERE merchant_id = $1 AND revoked = FALSE AND expires_at > NOW()
+ORDER BY created_at DESC;
+"""
+
+# --- Audit Log DML ---
+
+INSERT_AUDIT_LOG = """
+INSERT INTO audit_log (merchant_id, event_type, ip_address, user_agent, details)
+VALUES ($1, $2, $3, $4, $5);
+"""
