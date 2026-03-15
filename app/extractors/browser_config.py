@@ -16,10 +16,24 @@ Usage:
 from __future__ import annotations
 
 import logging
-import random
 from enum import Enum
 from crawl4ai import BrowserConfig, CacheMode, CrawlerRunConfig, UndetectedAdapter
 from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
+
+# Optional imports — available in crawl4ai ≥0.6; graceful fallback for older versions.
+try:
+    from crawl4ai import DefaultMarkdownGenerator
+    from crawl4ai.content_filter_strategy import PruningContentFilter
+except ImportError:  # pragma: no cover
+    DefaultMarkdownGenerator = None  # type: ignore[assignment,misc]
+    PruningContentFilter = None  # type: ignore[assignment,misc]
+
+try:
+    from crawl4ai import GeolocationConfig
+except ImportError:  # pragma: no cover
+    GeolocationConfig = None  # type: ignore[assignment,misc]
+
+from app.config import settings as _settings
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +68,12 @@ PRODUCT_WAIT_CONDITION = (
 DEFAULT_PAGE_TIMEOUT = 30000
 DEFAULT_DELAY_BEFORE_RETURN = 3.0
 
-# Realistic desktop user agents (Chrome 131 on macOS/Windows/Linux — updated Feb 2026)
-_USER_AGENTS = [
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-]
+# Single modern Chrome UA for httpx (non-browser) requests only.
+# Browser-based crawling relies on crawl4ai's built-in UA management.
+HTTPX_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 # Default HTTP headers applied to ALL stealth levels — prevents geo-redirects
 # and ensures servers return English content.  Reused by httpx-based extractors
@@ -73,8 +85,50 @@ DEFAULT_HEADERS: dict[str, str] = {
 
 
 def get_default_user_agent() -> str:
-    """Return a random User-Agent from the pool (for httpx-based extractors)."""
-    return random.choice(_USER_AGENTS)
+    """Return a modern Chrome User-Agent for httpx (non-browser) requests."""
+    return HTTPX_USER_AGENT
+
+# Cookie consent dismiss script — covers OneTrust, Cookiebot, generic accept
+# buttons, and German "Alle akzeptieren" variants.
+DISMISS_COOKIE_JS = """
+(function() {
+  const selectors = [
+    '#onetrust-accept-btn-handler',
+    '.onetrust-close-btn-handler',
+    '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+    '#CybotCookiebotDialogBodyButtonAccept',
+    '[data-cookieconsent="accept"]',
+    'button[aria-label="Accept cookies"]',
+    'button[aria-label="Accept all cookies"]',
+    'button[aria-label="Alle akzeptieren"]',
+    'button[aria-label="Alle Cookies akzeptieren"]',
+    '.cc-accept', '.cc-allow', '.cc-dismiss',
+    '[data-testid="cookie-accept"]',
+    'button.agree-btn',
+    '#accept-cookies',
+    '.cookie-accept-all',
+  ];
+  const textPatterns = [
+    /^accept all$/i,
+    /^accept cookies$/i,
+    /^alle akzeptieren$/i,
+    /^alle cookies akzeptieren$/i,
+    /^i agree$/i,
+    /^got it$/i,
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el) { el.click(); return; }
+  }
+  const buttons = document.querySelectorAll('button, a.btn, a.button');
+  for (const btn of buttons) {
+    const text = (btn.textContent || '').trim();
+    for (const pat of textPatterns) {
+      if (pat.test(text)) { btn.click(); return; }
+    }
+  }
+})();
+"""
 
 
 # ── Stealth levels ────────────────────────────────────────────────────
@@ -105,16 +159,19 @@ def get_browser_config(
 
     Returns:
         Configured BrowserConfig instance.
+
+    Note:
+        Browser-based crawling relies on crawl4ai's built-in UA management
+        (no manual rotation needed). Geolocation for Berlin is set on
+        CrawlerRunConfig via ``get_crawl_config()``.
     """
-    ua = random.choice(_USER_AGENTS)
-    headers = {**DEFAULT_HEADERS, "User-Agent": ua}
+    headers = {**DEFAULT_HEADERS}
 
     if stealth_level == StealthLevel.STANDARD:
         return BrowserConfig(
             headless=headless,
             verbose=False,
             text_mode=text_mode,
-            user_agent=ua,
             headers=headers,
         )
 
@@ -124,7 +181,6 @@ def get_browser_config(
             verbose=False,
             text_mode=text_mode,
             enable_stealth=True,
-            user_agent=ua,
             viewport_width=1920,
             viewport_height=1080,
             headers=headers,
@@ -136,7 +192,6 @@ def get_browser_config(
         verbose=False,
         text_mode=text_mode,
         enable_stealth=True,
-        user_agent=ua,
         viewport_width=1920,
         viewport_height=1080,
         headers=headers,
@@ -219,6 +274,27 @@ def get_crawl_config(
     if use_anti_bot and delay_before_return_html == DEFAULT_DELAY_BEFORE_RETURN:
         delay_before_return_html = 4.0
 
+    # Build the markdown generator with PruningContentFilter if available.
+    # PruningContentFilter removes boilerplate (nav, footer) from markdown,
+    # producing fit_markdown with 40-60% less noise for downstream extraction.
+    if markdown_generator is None and DefaultMarkdownGenerator is not None and PruningContentFilter is not None:
+        markdown_generator = DefaultMarkdownGenerator(
+            content_filter=PruningContentFilter(threshold=0.48),
+        )
+
+    # Geolocation — helps get local pricing for German e-commerce.
+    # These live on CrawlerRunConfig (not BrowserConfig) in crawl4ai.
+    geo_kwargs: dict = {}
+    if GeolocationConfig is not None:
+        geo_kwargs["geolocation"] = GeolocationConfig(
+            latitude=52.52,
+            longitude=13.405,
+            accuracy=100,
+        )
+        geo_kwargs["timezone_id"] = _settings.crawl_timezone
+
+    # Note: max_scroll_steps is intentionally omitted — crawl4ai ignores it.
+    # page_timeout is the real cap on how long scrolling can run.
     return CrawlerRunConfig(
         extraction_strategy=extraction_strategy,
         markdown_generator=markdown_generator,
@@ -233,11 +309,12 @@ def get_crawl_config(
         magic=use_anti_bot,
         override_navigator=use_anti_bot,
         scan_full_page=scan_full_page,
-        max_scroll_steps=20,
         remove_overlay_elements=remove_overlay_elements,
         scroll_delay=scroll_delay,
         check_robots_txt=check_robots_txt,
-        locale="en-US",
+        js_code=DISMISS_COOKIE_JS,
+        locale=_settings.crawl_locale,
+        **geo_kwargs,
     )
 
 

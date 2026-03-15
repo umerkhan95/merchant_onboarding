@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,14 +23,25 @@ from app.extractors.unified_crawl_extractor import (
 
 
 @dataclass
+class FakeMarkdownResult:
+    """Mimics crawl4ai MarkdownGenerationResult (>=0.6)."""
+
+    raw_markdown: str = ""
+    fit_markdown: str = ""
+
+
+@dataclass
 class FakeCrawlResult:
-    """Mimics crawl4ai CrawlResult for unit tests."""
+    """Mimics crawl4ai CrawlResult for unit tests.
+
+    markdown can be a plain string (old crawl4ai) or a FakeMarkdownResult
+    object (new crawl4ai >=0.6) to test both code paths.
+    """
 
     success: bool = True
     url: str = "https://example.com/product"
     html: str = ""
-    markdown: str = ""
-    fit_markdown: str = ""
+    markdown: str | FakeMarkdownResult = ""
     metadata: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     error_message: str = ""
@@ -236,10 +247,13 @@ class TestExtractFromCrawlResult:
         assert products[0].get("price") == "14.99"
 
     def test_fit_markdown_preferred(self):
+        """fit_markdown from MarkdownGenerationResult object is preferred."""
         result = FakeCrawlResult(
             html="<html><body></body></html>",
-            markdown="Nav junk\n\n# Product\n\n$9.99",
-            fit_markdown="# Product\n\n$9.99",
+            markdown=FakeMarkdownResult(
+                raw_markdown="Nav junk\n\n# Product\n\n$9.99",
+                fit_markdown="# Product\n\n$9.99",
+            ),
             url="https://shop.com/p",
         )
         products = UnifiedCrawlExtractor._extract_from_crawl_result(result, result.url)
@@ -509,6 +523,14 @@ class TestExtract:
 
 
 class TestExtractBatch:
+    @pytest.fixture(autouse=True)
+    def _patch_browser_config(self):
+        """Patch browser config factories to avoid crawl4ai compat issues."""
+        with patch("app.extractors.unified_crawl_extractor.get_browser_config", return_value=MagicMock()), \
+             patch("app.extractors.unified_crawl_extractor.get_crawler_strategy", return_value=None), \
+             patch("app.extractors.unified_crawl_extractor.get_crawl_config", return_value=MagicMock()):
+            yield
+
     @pytest.mark.asyncio
     async def test_empty_urls(self):
         extractor = UnifiedCrawlExtractor()
@@ -574,3 +596,257 @@ class TestHasPriceAndImage:
     def test_offers_price_counts(self):
         product = {"offers": {"price": "10.00"}, "image": "img.jpg"}
         assert UnifiedCrawlExtractor._has_price_and_image(product) is True
+
+
+# ── _extract_with_browser() single-browser tests (#154) ──────────────
+
+
+class TestExtractWithBrowserSingleBrowser:
+    """Verify _extract_with_browser creates ONE browser and retries with different configs."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_browser_config(self):
+        """Patch browser config factories to avoid crawl4ai compat issues."""
+        with patch("app.extractors.unified_crawl_extractor.get_browser_config", return_value=MagicMock()), \
+             patch("app.extractors.unified_crawl_extractor.get_crawler_strategy", return_value=None), \
+             patch("app.extractors.unified_crawl_extractor.get_crawl_config", return_value=MagicMock()):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_single_browser_instance(self):
+        """Only one AsyncWebCrawler context manager is created, not one per level."""
+        html = """
+        <html><head>
+        <script type="application/ld+json">
+        {"@type": "Product", "name": "Shoe", "offers": {"price": "59.00"}, "image": "shoe.jpg"}
+        </script>
+        </head><body></body></html>
+        """
+        # First arun returns failure, second returns success
+        fail_result = FakeCrawlResult(success=False, error_message="blocked")
+        ok_result = FakeCrawlResult(html=html, url="https://shop.com/shoe")
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun = AsyncMock(side_effect=[fail_result, ok_result])
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler) as mock_cls:
+            products = await extractor._extract_with_browser("https://shop.com/shoe")
+
+        assert len(products) == 1
+        assert products[0]["name"] == "Shoe"
+        # Only ONE AsyncWebCrawler instance created
+        mock_cls.assert_called_once()
+        # arun called twice (escalation from STANDARD to STEALTH)
+        assert mock_crawler.arun.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_all_levels_fail(self):
+        """When all stealth levels fail, returns empty list."""
+        fail_result = FakeCrawlResult(success=False, error_message="blocked")
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun = AsyncMock(return_value=fail_result)
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler):
+            products = await extractor._extract_with_browser("https://shop.com/gone")
+
+        assert products == []
+        # All 3 levels attempted
+        assert mock_crawler.arun.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_stops_at_first_successful_extraction(self):
+        """Stops escalation as soon as products are extracted."""
+        html = """
+        <html><head>
+        <script type="application/ld+json">
+        {"@type": "Product", "name": "Hat", "offers": {"price": "25.00"}, "image": "hat.jpg"}
+        </script>
+        </head><body></body></html>
+        """
+        ok_result = FakeCrawlResult(html=html, url="https://shop.com/hat")
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun = AsyncMock(return_value=ok_result)
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler):
+            products = await extractor._extract_with_browser("https://shop.com/hat")
+
+        assert len(products) == 1
+        # Stopped at first level (STANDARD)
+        assert mock_crawler.arun.call_count == 1
+
+
+# ── _extract_with_load_more() tests (#150) ───────────────────────────
+
+
+class TestExtractWithLoadMore:
+    """Test session-based Load More button handling."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_browser_config(self):
+        """Patch browser config factories to avoid crawl4ai compat issues."""
+        mock_config = MagicMock()
+        with patch("app.extractors.unified_crawl_extractor.get_browser_config", return_value=mock_config), \
+             patch("app.extractors.unified_crawl_extractor.get_crawler_strategy", return_value=None), \
+             patch("app.extractors.unified_crawl_extractor.get_crawl_config", return_value=MagicMock()):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_initial_load_returns_products(self):
+        """When initial load has products and no load-more works, returns initial products."""
+        html = """
+        <html><head>
+        <script type="application/ld+json">
+        {"@type": "Product", "name": "Coffee", "offers": {"price": "15.00"}, "image": "coffee.jpg"}
+        </script>
+        </head><body></body></html>
+        """
+        initial_result = FakeCrawlResult(html=html, url="https://shop.com/products")
+        # Subsequent clicks return same count (no new products)
+        click_result = FakeCrawlResult(html=html, url="https://shop.com/products")
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun = AsyncMock(side_effect=[initial_result, click_result])
+        mock_crawler.kill_session = AsyncMock()
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler):
+            products = await extractor._extract_with_load_more("https://shop.com/products")
+
+        assert len(products) == 1
+        assert products[0]["name"] == "Coffee"
+        mock_crawler.kill_session.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_more_accumulates_products(self):
+        """Each click reveals more products — method continues clicking."""
+        def make_html(count):
+            items = []
+            for i in range(count):
+                items.append(
+                    f'{{"@type": "Product", "name": "P{i}", "sku": "sku{i}", '
+                    f'"offers": {{"price": "{10 + i}.00"}}, "image": "p{i}.jpg"}}'
+                )
+            return (
+                '<html><head><script type="application/ld+json">'
+                f'[{",".join(items)}]'
+                '</script></head><body></body></html>'
+            )
+
+        initial_result = FakeCrawlResult(html=make_html(2), url="https://shop.com/products")
+        click1_result = FakeCrawlResult(html=make_html(4), url="https://shop.com/products")
+        click2_result = FakeCrawlResult(html=make_html(6), url="https://shop.com/products")
+        # Third click returns same count — stops
+        click3_result = FakeCrawlResult(html=make_html(6), url="https://shop.com/products")
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun = AsyncMock(
+            side_effect=[initial_result, click1_result, click2_result, click3_result]
+        )
+        mock_crawler.kill_session = AsyncMock()
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler):
+            products = await extractor._extract_with_load_more("https://shop.com/products")
+
+        assert len(products) == 6
+        mock_crawler.kill_session.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_initial_failure_returns_empty(self):
+        """When initial page load fails, returns empty list."""
+        fail_result = FakeCrawlResult(success=False, error_message="timeout")
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun = AsyncMock(return_value=fail_result)
+        mock_crawler.kill_session = AsyncMock()
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler):
+            products = await extractor._extract_with_load_more("https://shop.com/products")
+
+        assert products == []
+
+    @pytest.mark.asyncio
+    async def test_session_cleanup_on_error(self):
+        """Session is cleaned up even if an error occurs during load-more clicks."""
+        html = """
+        <html><head>
+        <script type="application/ld+json">
+        {"@type": "Product", "name": "Item", "offers": {"price": "10.00"}, "image": "item.jpg"}
+        </script>
+        </head><body></body></html>
+        """
+        initial_result = FakeCrawlResult(html=html, url="https://shop.com/products")
+
+        mock_crawler = AsyncMock()
+        # Initial load succeeds, then subsequent click raises exception
+        mock_crawler.arun = AsyncMock(side_effect=[initial_result, RuntimeError("browser crash")])
+        mock_crawler.kill_session = AsyncMock()
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler):
+            products = await extractor._extract_with_load_more("https://shop.com/products")
+
+        # Should return the initial products despite the error
+        assert len(products) == 1
+        mock_crawler.kill_session.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_max_clicks_respected(self):
+        """Does not click more than _MAX_LOAD_MORE_CLICKS times."""
+        def make_html(count):
+            items = []
+            for i in range(count):
+                items.append(
+                    f'{{"@type": "Product", "name": "P{i}", "sku": "sku{i}", '
+                    f'"offers": {{"price": "{10 + i}.00"}}, "image": "p{i}.jpg"}}'
+                )
+            return (
+                '<html><head><script type="application/ld+json">'
+                f'[{",".join(items)}]'
+                '</script></head><body></body></html>'
+            )
+
+        # Each click adds 1 more product — would go forever without the limit
+        results = [FakeCrawlResult(html=make_html(i + 1), url="https://shop.com/p") for i in range(12)]
+
+        mock_crawler = AsyncMock()
+        mock_crawler.arun = AsyncMock(side_effect=results)
+        mock_crawler.kill_session = AsyncMock()
+        mock_crawler.__aenter__ = AsyncMock(return_value=mock_crawler)
+        mock_crawler.__aexit__ = AsyncMock(return_value=False)
+
+        extractor = UnifiedCrawlExtractor()
+        with patch("crawl4ai.AsyncWebCrawler", return_value=mock_crawler):
+            products = await extractor._extract_with_load_more("https://shop.com/p")
+
+        # 1 initial + 10 clicks = 11 arun calls max
+        assert mock_crawler.arun.call_count <= 11
+        mock_crawler.kill_session.assert_called_once()
+
+    def test_load_more_selectors_defined(self):
+        """Verify load-more selectors list is populated."""
+        assert len(UnifiedCrawlExtractor._LOAD_MORE_SELECTORS) > 0
+
+    def test_max_load_more_clicks_is_10(self):
+        """Verify max clicks constant is 10."""
+        assert UnifiedCrawlExtractor._MAX_LOAD_MORE_CLICKS == 10

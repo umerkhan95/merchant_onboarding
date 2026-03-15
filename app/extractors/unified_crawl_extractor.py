@@ -208,40 +208,196 @@ class UnifiedCrawlExtractor(BaseExtractor):
     # ── Browser path ───────────────────────────────────────────────────
 
     async def _extract_with_browser(self, url: str) -> list[dict]:
-        """Full browser crawl with stealth escalation, extracting all layers."""
+        """Full browser crawl with stealth escalation, extracting all layers.
+
+        Creates ONE browser instance and retries with different CrawlerRunConfig
+        params for each stealth level, avoiding the cost of spawning a new
+        browser per escalation step.
+        """
         from crawl4ai import AsyncWebCrawler
 
-        for level in self._ESCALATION_ORDER:
-            if self._ESCALATION_ORDER.index(level) < self._ESCALATION_ORDER.index(self._stealth_level):
-                continue
+        levels = [
+            level for level in self._ESCALATION_ORDER
+            if self._ESCALATION_ORDER.index(level) >= self._ESCALATION_ORDER.index(self._stealth_level)
+        ]
 
-            browser_config = get_browser_config(level)
-            crawl_config = get_crawl_config(stealth_level=level, scan_full_page=True)
-            crawler_strategy = get_crawler_strategy(level, browser_config)
+        if not levels:
+            return []
 
-            try:
-                async with AsyncWebCrawler(
-                    config=browser_config,
-                    crawler_strategy=crawler_strategy,
-                ) as crawler:
-                    result = await crawler.arun(url=url, config=crawl_config)
+        # Use the highest stealth level for the browser config (superset of lower levels)
+        max_level = levels[-1]
+        browser_config = get_browser_config(max_level)
+        crawler_strategy = get_crawler_strategy(max_level, browser_config)
 
-                if not result.success:
-                    logger.warning(
-                        "Browser crawl (%s) failed for %s: %s",
-                        level.value, url, getattr(result, "error_message", "unknown"),
-                    )
-                    continue
+        try:
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
+                for level in levels:
+                    crawl_config = get_crawl_config(stealth_level=level, scan_full_page=True)
+                    try:
+                        result = await crawler.arun(url=url, config=crawl_config)
 
-                products = self._extract_from_crawl_result(result, url)
-                if products:
-                    return products
+                        if not result.success:
+                            logger.warning(
+                                "Browser crawl (%s) failed for %s: %s",
+                                level.value, url, getattr(result, "error_message", "unknown"),
+                            )
+                            continue
 
-            except Exception as e:
-                logger.warning("Browser crawl (%s) error for %s: %s", level.value, url, e)
-                continue
+                        products = self._extract_from_crawl_result(result, url)
+                        if products:
+                            return products
+
+                    except Exception as e:
+                        logger.warning("Browser crawl (%s) error for %s: %s", level.value, url, e)
+                        continue
+        except Exception as e:
+            logger.warning("Browser startup error for %s: %s", url, e)
 
         return []
+
+    # ── Load More handling ────────────────────────────────────────────
+
+    # Common "Load More" / "Show More" button selectors
+    _LOAD_MORE_SELECTORS = [
+        "button.load-more",
+        "button.show-more",
+        "a.load-more",
+        "a.show-more",
+        "[data-action='load-more']",
+        "[data-testid='load-more']",
+        "button:has-text('Load More')",
+        "button:has-text('Show More')",
+        "button:has-text('Load more')",
+        "button:has-text('Show more')",
+        "button:has-text('View More')",
+        "button:has-text('View more')",
+        ".pagination__next",
+        ".load-more-btn",
+        ".show-more-btn",
+    ]
+
+    _MAX_LOAD_MORE_CLICKS = 10
+
+    async def _extract_with_load_more(self, url: str) -> list[dict]:
+        """Extract products from a page with Load More / Show More buttons.
+
+        Uses crawl4ai session management to keep the page open across iterations:
+        1. Creates a session_id from the URL hash
+        2. Loads the page initially
+        3. Clicks common "Load More" / "Show More" buttons via js_code
+        4. Uses js_only=True for subsequent iterations (skip navigation)
+        5. Uses wait_for to confirm new content loaded
+        6. Repeats up to _MAX_LOAD_MORE_CLICKS times or until no new products appear
+        7. Cleans up session with crawler.kill_session()
+
+        Returns:
+            List of extracted product dicts, or empty list on failure.
+        """
+        from crawl4ai import AsyncWebCrawler
+
+        session_id = hashlib.md5(url.encode()).hexdigest()[:12]
+
+        # JS that clicks the first visible load-more button and returns whether it found one
+        selectors_js = " || ".join(
+            f'document.querySelector("{sel}")'
+            for sel in self._LOAD_MORE_SELECTORS
+        )
+        click_js = f"""
+        (async () => {{
+            const btn = {selectors_js};
+            if (btn && btn.offsetParent !== null) {{
+                btn.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+                await new Promise(r => setTimeout(r, 300));
+                btn.click();
+                return true;
+            }}
+            return false;
+        }})()
+        """
+
+        # JS wait condition: wait for new content or network idle
+        wait_for_content = (
+            "js:() => {"
+            "  return new Promise(resolve => setTimeout(() => resolve(true), 2000));"
+            "}"
+        )
+
+        browser_config = get_browser_config(self._stealth_level)
+        crawler_strategy = get_crawler_strategy(self._stealth_level, browser_config)
+
+        all_products: list[dict] = []
+        try:
+            async with AsyncWebCrawler(
+                config=browser_config,
+                crawler_strategy=crawler_strategy,
+            ) as crawler:
+                # Initial page load
+                initial_config = get_crawl_config(
+                    stealth_level=self._stealth_level,
+                    scan_full_page=True,
+                )
+                initial_config.session_id = session_id
+
+                result = await crawler.arun(url=url, config=initial_config)
+                if not result.success:
+                    logger.warning("Load-more initial crawl failed for %s: %s", url, getattr(result, "error_message", "unknown"))
+                    return []
+
+                all_products = self._extract_from_crawl_result(result, url)
+                prev_count = len(all_products)
+                logger.debug("Load-more initial extraction: %d products from %s", prev_count, url)
+
+                # Click Load More repeatedly
+                for iteration in range(self._MAX_LOAD_MORE_CLICKS):
+                    load_more_config = get_crawl_config(
+                        stealth_level=self._stealth_level,
+                        scan_full_page=False,
+                        wait_for=wait_for_content,
+                    )
+                    load_more_config.session_id = session_id
+                    load_more_config.js_code = click_js
+                    load_more_config.js_only = True
+
+                    try:
+                        result = await crawler.arun(url=url, config=load_more_config)
+                    except Exception as e:
+                        logger.debug("Load-more click %d failed for %s: %s", iteration + 1, url, e)
+                        break
+
+                    if not result.success:
+                        logger.debug("Load-more click %d unsuccessful for %s", iteration + 1, url)
+                        break
+
+                    products = self._extract_from_crawl_result(result, url)
+                    current_count = len(products)
+
+                    if current_count <= prev_count:
+                        logger.debug(
+                            "Load-more: no new products after click %d (%d <= %d), stopping",
+                            iteration + 1, current_count, prev_count,
+                        )
+                        break
+
+                    all_products = products
+                    prev_count = current_count
+                    logger.debug(
+                        "Load-more click %d: now %d products from %s",
+                        iteration + 1, current_count, url,
+                    )
+
+                # Clean up session
+                try:
+                    await crawler.kill_session(session_id)
+                except Exception:
+                    pass  # Best-effort cleanup
+
+        except Exception as e:
+            logger.warning("Load-more extraction error for %s: %s", url, e)
+
+        return all_products
 
     # ── Core extraction from CrawlResult ───────────────────────────────
 
@@ -254,8 +410,22 @@ class UnifiedCrawlExtractor(BaseExtractor):
         """
         html = getattr(result, "html", "") or ""
         metadata = getattr(result, "metadata", {}) or {}
-        markdown = getattr(result, "markdown", "") or ""
-        fit_markdown = getattr(result, "fit_markdown", "") or ""
+
+        # crawl4ai >=0.6 changed result.markdown from a plain string to a
+        # MarkdownGenerationResult object with .raw_markdown / .fit_markdown.
+        # Handle both layouts safely.
+        md_obj = getattr(result, "markdown", None)
+        if md_obj and hasattr(md_obj, "fit_markdown"):
+            # New-style MarkdownGenerationResult object
+            fit_markdown = md_obj.fit_markdown or ""
+            markdown = (md_obj.raw_markdown if hasattr(md_obj, "raw_markdown") else str(md_obj)) or ""
+        elif isinstance(md_obj, str):
+            markdown = md_obj or ""
+            fit_markdown = ""
+        else:
+            markdown = ""
+            fit_markdown = ""
+
         media = getattr(result, "media", {}) or {}
 
         # Layer 1: JSON-LD from HTML
