@@ -40,7 +40,7 @@ success "Docker Compose found ($($COMPOSE version --short 2>/dev/null || $COMPOS
 # ── Check for port conflicts ────────────────────────────────────────────────
 info "Checking for port conflicts..."
 PORTS_IN_USE=()
-for port in 8000 3001 3002 5432 6379 5555; do
+for port in 8000 3001 5432 6379 5555; do
     # Use lsof on macOS/Linux; fall back to ss
     if command -v lsof &>/dev/null; then
         if lsof -iTCP:"$port" -sTCP:LISTEN -P -n &>/dev/null; then
@@ -178,7 +178,6 @@ wait_for "PostgreSQL" "$COMPOSE exec -T postgres pg_isready -U postgres" || HEAL
 wait_for "Redis" "$COMPOSE exec -T redis redis-cli ping" || HEALTH_OK=false
 wait_for "API Server" "curl -sf http://localhost:8000/health" || HEALTH_OK=false
 
-wait_for "Merchant Portal" "curl -sf http://localhost:3002/ -o /dev/null" || warn "Merchant Portal not responding (may still be building)"
 wait_for "Admin Dashboard" "curl -sf http://localhost:3001/ -o /dev/null" || warn "Admin Dashboard not responding (may still be building)"
 
 if [ "$HEALTH_OK" = false ]; then
@@ -196,9 +195,10 @@ echo "  Merchant Onboarding Stack is running!"
 echo "  =================================================="
 printf "${NC}\n"
 printf "  ${BOLD}API Server:${NC}        http://localhost:8000\n"
-printf "  ${BOLD}Merchant Portal:${NC}   http://localhost:3002\n"
 printf "  ${BOLD}Admin Dashboard:${NC}   http://localhost:3001\n"
 printf "  ${BOLD}Flower (Celery):${NC}   http://localhost:5555  (admin/admin)\n"
+echo ""
+printf "  ${BOLD}Merchant Portal:${NC}   (separate repo — see idealo-merchant-portal)\n"
 echo ""
 printf "  ${BOLD}Default API Key:${NC}   dev-key-1\n"
 echo ""

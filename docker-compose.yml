@@ -25,7 +25,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_PORT:-6380}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -79,9 +79,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uv run celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    command: /app/.venv/bin/python -m celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
     healthcheck:
-      test: ["CMD-SHELL", "uv run celery -A app.workers.celery_app inspect ping --timeout 5 || exit 1"]
+      test: ["CMD-SHELL", "/app/.venv/bin/python -m celery -A app.workers.celery_app inspect ping --timeout 5 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -105,7 +105,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: uv run celery -A app.workers.celery_app flower --port=5555
+    command: /app/.venv/bin/python -m celery -A app.workers.celery_app flower --port=5555
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5555/healthcheck')\""]
       interval: 15s
@@ -120,37 +120,10 @@ services:
     networks:
       - app-network
 
-  # NOTE: The merchant-portal build context points outside this repository
-  # (../idealo-merchant-portal). This works with `docker compose up` from
-  # the merchant_onboarding directory, but will NOT work with remote Docker
-  # contexts or CI systems that clone only this repo. For CI, build the
-  # merchant-portal image separately and reference it by image name instead.
-  merchant-portal:
-    build:
-      context: ../idealo-merchant-portal
-      args:
-        NEXT_PUBLIC_API_URL: http://api:8000
-    ports:
-      - "${MERCHANT_PORTAL_PORT:-3002}:3002"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://api:8000
-      - NEXT_PUBLIC_API_KEY=${API_KEY:-dev-key-1}
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3002/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-    networks:
-      - app-network
+  # NOTE: The idealo merchant portal (port 3002) is in a separate repo:
+  # https://github.com/umerkhan95/idealo-merchant-portal
+  # To run it alongside this stack, see its own docker-compose or run:
+  #   cd ../idealo-merchant-portal && npm run dev
 
   admin-dashboard:
     build:
