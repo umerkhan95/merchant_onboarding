@@ -1,0 +1,55 @@
+# Version control
+.git
+.github
+.gitignore
+
+# Virtual environments
+.venv
+venv
+env
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist
+build
+
+# Environment / secrets
+.env
+.env.*
+
+# Tests and non-production code
+tests/
+evals/
+docs/
+research/
+scripts/
+fixtures/
+
+# Frontend
+frontend/node_modules
+frontend/.next
+frontend/dist
+node_modules
+
+# Claude / AI tooling
+.claude/
+memory/
+
+# Documentation
+*.md
+
+# Docker files (no recursive build context)
+Dockerfile
+docker-compose.yml
+docker-compose*.yml
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

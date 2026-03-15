@@ -1,75 +1,188 @@
 services:
-  api:
-    build: .
-    ports:
-      - "8000:8000"
-    env_file: .env
-    depends_on:
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-    volumes:
-      - .:/app
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/merchant_onboarding
-      - REDIS_URL=redis://redis:6379/0
-    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
   postgres:
     image: postgres:16-alpine
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: merchant_onboarding
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-merchant_onboarding}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - app-network
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - app-network
+
+  api:
+    build: .
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-merchant_onboarding}
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    networks:
+      - app-network
 
   celery_worker:
     build: .
     env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-merchant_onboarding}
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      redis:
-        condition: service_started
       postgres:
         condition: service_healthy
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/merchant_onboarding
-      - REDIS_URL=redis://redis:6379/0
+      redis:
+        condition: service_healthy
     command: uv run celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    healthcheck:
+      test: ["CMD-SHELL", "uv run celery -A app.workers.celery_app inspect ping --timeout 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    networks:
+      - app-network
 
   flower:
     build: .
     ports:
-      - "5555:5555"
+      - "${FLOWER_PORT:-5555}:5555"
     env_file: .env
-    depends_on:
-      - redis
-    command: uv run celery -A app.workers.celery_app flower --port=5555
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    depends_on:
-      - api
     environment:
-      - NEXT_PUBLIC_API_KEY=${API_KEY:-dev-key}
+      - REDIS_URL=redis://redis:6379/0
+      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: uv run celery -A app.workers.celery_app flower --port=5555
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5555/healthcheck')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - app-network
+
+  # NOTE: The merchant-portal build context points outside this repository
+  # (../idealo-merchant-portal). This works with `docker compose up` from
+  # the merchant_onboarding directory, but will NOT work with remote Docker
+  # contexts or CI systems that clone only this repo. For CI, build the
+  # merchant-portal image separately and reference it by image name instead.
+  merchant-portal:
+    build:
+      context: ../idealo-merchant-portal
+      args:
+        NEXT_PUBLIC_API_URL: http://api:8000
+    ports:
+      - "${MERCHANT_PORTAL_PORT:-3002}:3002"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+      - NEXT_PUBLIC_API_KEY=${API_KEY:-dev-key-1}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3002/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - app-network
+
+  admin-dashboard:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://api:8000
+    ports:
+      - "${ADMIN_DASHBOARD_PORT:-3001}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+      - NEXT_PUBLIC_API_KEY=${API_KEY:-dev-key-1}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - app-network
 
 volumes:
-  redis_data:
   postgres_data:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge
