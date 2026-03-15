@@ -36,6 +36,13 @@ class Settings(BaseSettings):
             return set()
         return {k.strip() for k in self.api_keys.split(",") if k.strip()}
 
+    # CORS
+    cors_allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+    ]
+
     # Rate limiting
     rate_limit_default: str = "10/minute"
     rate_limit_onboard: str = "2/minute"
