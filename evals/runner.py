@@ -579,15 +579,12 @@ class EvalRunner:
 
             return MagentoAPIExtractor(page_size=100)
 
-        elif tier_name == "schema_org":
-            from app.extractors.schema_org_extractor import SchemaOrgExtractor
-
-            return SchemaOrgExtractor()
-
-        elif tier_name == "opengraph":
-            from app.extractors.opengraph_extractor import OpenGraphExtractor
-
-            return OpenGraphExtractor()
+        elif tier_name in ("schema_org", "opengraph"):
+            raise ValueError(
+                f"Online mode not supported for {tier_name} -- "
+                f"extract(url) has been removed. Use offline mode (extract_from_html) "
+                f"or the unified_crawl tier instead."
+            )
 
         elif tier_name == "css_generic":
             from app.extractors.css_extractor import CSSExtractor

@@ -76,12 +76,16 @@ class SmartCSSExtractor(BaseExtractor):
         self.cache = schema_cache
         self.stealth_level = stealth_level
 
-    async def _fetch_html(self, url: str) -> str | None:
+    async def _fetch_html_for_schema(self, url: str) -> str | None:
         """Fetch page HTML for schema generation using a headless browser.
 
-        Uses AsyncWebCrawler instead of plain HTTP so we get the JS-rendered
-        DOM. This is critical for SPAs and Shopify themes that render product
-        details client-side — httpx only gets the empty shell HTML.
+        Prefers crawl4ai's ``fit_html`` (content-only HTML with navigation,
+        headers, footers stripped) over raw HTML.  Falls back to
+        ``_extract_product_region()`` when ``fit_html`` is not available.
+
+        Uses AsyncWebCrawler with stealth settings to get the JS-rendered DOM.
+        This is critical for SPAs and Shopify themes that render product
+        details client-side.
         """
         try:
             browser_config = get_browser_config(self.stealth_level, text_mode=False)
@@ -98,7 +102,19 @@ class SmartCSSExtractor(BaseExtractor):
                         url, result.error_message,
                     )
                     return None
-                return result.html
+
+                # Prefer fit_html (crawl4ai's content-focused HTML) over raw HTML
+                fit = getattr(result, "fit_html", None)
+                if fit:
+                    logger.debug("Using fit_html (%d bytes) for schema generation from %s", len(fit), url)
+                    return fit
+
+                # Fallback: strip page chrome with BeautifulSoup heuristics
+                if result.html:
+                    logger.debug("fit_html not available, falling back to _extract_product_region for %s", url)
+                    return self._extract_product_region(result.html)
+
+                return None
         except Exception as e:
             logger.error("Failed to fetch HTML for schema generation from %s: %s", url, e)
             return None
@@ -110,16 +126,13 @@ class SmartCSSExtractor(BaseExtractor):
     def _extract_product_region(html: str) -> str:
         """Extract the product-relevant DOM region from full-page HTML.
 
-        Removes header, footer, nav, aside, variant pickers, reviews, media
-        galleries, and other non-product sections, then looks for a product
-        info container. Keeps only the structural DOM that generate_schema()
-        needs to produce CSS selectors for our data model fields:
-        title, price, currency, description, image_url, sku, in_stock,
-        vendor, product_url, product_type.
+        Fallback for when crawl4ai's ``fit_html`` is not available.  Removes
+        header, footer, nav, aside, variant pickers, reviews, media galleries,
+        and other non-product sections, then looks for a product info container.
         """
         soup = BeautifulSoup(html, "html.parser")
 
-        # Remove page chrome — these never contain product data
+        # Remove page chrome -- these never contain product data
         for tag in soup.find_all([
             "script", "style", "svg", "noscript", "iframe",
             "header", "footer", "nav", "aside", "form",
@@ -149,7 +162,7 @@ class SmartCSSExtractor(BaseExtractor):
         for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
             comment.extract()
 
-        # Try to find a product info container — prefer info wrappers over
+        # Try to find a product info container -- prefer info wrappers over
         # full product wrappers (which include media galleries, reviews, etc.)
         product_selectors = [
             # Info-specific wrappers (title + price + description area)
@@ -264,12 +277,16 @@ class SmartCSSExtractor(BaseExtractor):
         return True
 
     async def _generate_schema(self, html: str) -> dict | None:
-        """Generate CSS extraction schema from sample HTML using LLM."""
+        """Generate CSS extraction schema from sample HTML using LLM.
+
+        Expects HTML that has already been reduced to the product region
+        (via fit_html or _extract_product_region).  Truncates to
+        _MAX_SCHEMA_HTML_BYTES before sending to the LLM.
+        """
         try:
-            html = self._extract_product_region(html)
             if len(html) > self._MAX_SCHEMA_HTML_BYTES:
                 html = html[: self._MAX_SCHEMA_HTML_BYTES]
-                # Avoid cutting mid-tag — find last '>' before the limit
+                # Avoid cutting mid-tag -- find last '>' before the limit
                 last_close = html.rfind(">")
                 if last_close > 0:
                     html = html[: last_close + 1]
@@ -294,12 +311,12 @@ class SmartCSSExtractor(BaseExtractor):
                         schema.get("baseSelector"), len(schema.get("fields", [])), robustness_score)
 
             if robustness_score < 0.3:
-                logger.warning("Generated schema has very low robustness score (%.2f) — selectors are too brittle",
+                logger.warning("Generated schema has very low robustness score (%.2f) -- selectors are too brittle",
                               robustness_score)
                 return None
 
             if robustness_score < 0.5:
-                logger.info("Generated schema has moderate robustness score (%.2f) — proceeding with caution",
+                logger.info("Generated schema has moderate robustness score (%.2f) -- proceeding with caution",
                             robustness_score)
 
             return schema
@@ -322,8 +339,8 @@ class SmartCSSExtractor(BaseExtractor):
         if schema:
             return schema
 
-        # Fetch HTML from primary URL
-        html = await self._fetch_html(url)
+        # Fetch HTML from primary URL (prefers fit_html, falls back to DOM stripping)
+        html = await self._fetch_html_for_schema(url)
         if not html:
             return None
 
@@ -339,7 +356,7 @@ class SmartCSSExtractor(BaseExtractor):
 
             # Fetch additional samples (skip first URL since it's the primary)
             for sample_url in sample_urls[1:]:
-                sample_html = await self._fetch_html(sample_url)
+                sample_html = await self._fetch_html_for_schema(sample_url)
                 if sample_html:
                     sample_htmls.append(sample_html)
 

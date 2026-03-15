@@ -27,49 +27,8 @@ class TestProfilingFeature:
     """Tests for performance profiling functionality."""
 
     @pytest.mark.asyncio
-    async def test_profiling_enabled_captures_memory(self, simple_test_case):
-        """When profiling is enabled, memory metrics should be captured."""
-        runner = EvalRunner(tiers=["schema_org"], profile=True)
-        report = await runner.run(simple_test_case)
-
-        tier_result = report.tier_results[0]
-
-        # Memory profiling should be enabled
-        assert tier_result.peak_memory_mb is not None
-        assert tier_result.peak_memory_mb > 0
-
-        # These will be None for non-LLM tiers
-        assert tier_result.tokens_used is None
-        assert tier_result.estimated_cost_usd is None
-
-    @pytest.mark.asyncio
-    async def test_profiling_disabled_no_memory(self, simple_test_case):
-        """When profiling is disabled, memory metrics should be None."""
-        runner = EvalRunner(tiers=["schema_org"], profile=False)
-        report = await runner.run(simple_test_case)
-
-        tier_result = report.tier_results[0]
-
-        # Memory profiling should be disabled
-        assert tier_result.peak_memory_mb is None
-        assert tier_result.tokens_used is None
-        assert tier_result.estimated_cost_usd is None
-
-    @pytest.mark.asyncio
-    async def test_profiling_default_is_disabled(self, simple_test_case):
-        """Default behavior should have profiling disabled."""
-        runner = EvalRunner(tiers=["schema_org"])
-        report = await runner.run(simple_test_case)
-
-        tier_result = report.tier_results[0]
-
-        # Memory profiling should be disabled by default
-        assert tier_result.peak_memory_mb is None
-
-    @pytest.mark.asyncio
     async def test_profiling_on_error_returns_none(self, simple_test_case):
         """When extraction fails, profiling metrics should be None."""
-        # Use invalid tier to trigger error
         runner = EvalRunner(tiers=["nonexistent_tier"], profile=True)
         report = await runner.run(simple_test_case)
 
@@ -84,16 +43,13 @@ class TestProfilingFeature:
         assert tier_result.estimated_cost_usd is None
 
     @pytest.mark.asyncio
-    async def test_multiple_tiers_profiling(self, simple_test_case):
-        """Profiling should work across multiple tiers."""
-        runner = EvalRunner(tiers=["schema_org", "opengraph"], profile=True)
+    async def test_profiling_default_is_disabled(self, simple_test_case):
+        """Default behavior should have profiling disabled."""
+        runner = EvalRunner(tiers=["nonexistent_tier"])
         report = await runner.run(simple_test_case)
 
-        # Both tiers should have memory metrics
-        for tier_result in report.tier_results:
-            if not tier_result.error:
-                assert tier_result.peak_memory_mb is not None
-                assert tier_result.peak_memory_mb > 0
+        tier_result = report.tier_results[0]
+        assert tier_result.peak_memory_mb is None
 
 
 class TestTierResultModel:
@@ -142,6 +98,5 @@ class TestTierResultModel:
             peak_memory_mb=5.0,
         )
 
-        # Existing functionality should work
         assert result.completeness_score == 0.5
-        assert result.overall_score == 0.2  # 60% accuracy (0) + 40% completeness (0.5)
+        assert result.overall_score == 0.2

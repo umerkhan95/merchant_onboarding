@@ -3,8 +3,8 @@
 Covers:
 - defusedxml blocks XML bombs (Billion Laughs / entity expansion attacks)
 - Oversized sitemap responses are rejected in URLDiscoveryService
-- Oversized HTML responses are rejected in SchemaOrgExtractor, OpenGraphExtractor,
-  Pipeline._fetch_html, and PlatformDetector._probe_html_content
+- Oversized HTML responses are rejected in Pipeline._fetch_html
+  and PlatformDetector._probe_html_content
 """
 
 from __future__ import annotations
@@ -15,8 +15,6 @@ import respx
 
 from app.config import MAX_RESPONSE_SIZE
 from app.services.url_discovery import URLDiscoveryService
-from app.extractors.schema_org_extractor import SchemaOrgExtractor
-from app.extractors.opengraph_extractor import OpenGraphExtractor
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -166,106 +164,6 @@ class TestURLDiscoverySizeLimits:
         )
         assert len(urls) == 2
         assert "https://example.com/products/shirt" in urls
-
-
-# ── SchemaOrgExtractor response size limits ───────────────────────────
-
-
-class TestSchemaOrgExtractorSizeLimits:
-    """Verify that SchemaOrgExtractor.extract() rejects oversized HTTP responses."""
-
-    @respx.mock
-    async def test_rejects_response_by_content_length_header(self):
-        """extract() returns [] when Content-Length exceeds MAX_RESPONSE_SIZE."""
-        extractor = SchemaOrgExtractor()
-        oversized_length = MAX_RESPONSE_SIZE + 1
-
-        respx.get("https://example.com/products/item").mock(
-            return_value=httpx.Response(
-                200,
-                text=VALID_PRODUCT_HTML,
-                headers={"content-length": str(oversized_length)},
-            )
-        )
-
-        result = await extractor.extract("https://example.com/products/item")
-        assert result.products == []
-
-    @respx.mock
-    async def test_rejects_response_by_body_length(self):
-        """extract() returns [] when the actual body exceeds MAX_RESPONSE_SIZE."""
-        extractor = SchemaOrgExtractor()
-
-        oversized_body = "x" * (MAX_RESPONSE_SIZE + 1)
-        respx.get("https://example.com/products/item").mock(
-            return_value=httpx.Response(200, text=oversized_body)
-        )
-
-        result = await extractor.extract("https://example.com/products/item")
-        assert result.products == []
-
-    @respx.mock
-    async def test_accepts_normal_response(self):
-        """extract() works normally for responses within the size limit."""
-        extractor = SchemaOrgExtractor()
-
-        respx.get("https://example.com/products/item").mock(
-            return_value=httpx.Response(200, text=VALID_PRODUCT_HTML)
-        )
-
-        result = await extractor.extract("https://example.com/products/item")
-        assert len(result.products) == 1
-        assert result.products[0]["name"] == "Test Product"
-
-
-# ── OpenGraphExtractor response size limits ───────────────────────────
-
-
-class TestOpenGraphExtractorSizeLimits:
-    """Verify that OpenGraphExtractor.extract() rejects oversized HTTP responses."""
-
-    @respx.mock
-    async def test_rejects_response_by_content_length_header(self):
-        """extract() returns [] when Content-Length exceeds MAX_RESPONSE_SIZE."""
-        extractor = OpenGraphExtractor()
-        oversized_length = MAX_RESPONSE_SIZE + 1
-
-        respx.get("https://example.com/products/item").mock(
-            return_value=httpx.Response(
-                200,
-                text=VALID_OG_HTML,
-                headers={"content-length": str(oversized_length)},
-            )
-        )
-
-        result = await extractor.extract("https://example.com/products/item")
-        assert result.products == []
-
-    @respx.mock
-    async def test_rejects_response_by_body_length(self):
-        """extract() returns [] when the actual body exceeds MAX_RESPONSE_SIZE."""
-        extractor = OpenGraphExtractor()
-
-        oversized_body = "x" * (MAX_RESPONSE_SIZE + 1)
-        respx.get("https://example.com/products/item").mock(
-            return_value=httpx.Response(200, text=oversized_body)
-        )
-
-        result = await extractor.extract("https://example.com/products/item")
-        assert result.products == []
-
-    @respx.mock
-    async def test_accepts_normal_response(self):
-        """extract() works normally for responses within the size limit."""
-        extractor = OpenGraphExtractor()
-
-        respx.get("https://example.com/products/item").mock(
-            return_value=httpx.Response(200, text=VALID_OG_HTML)
-        )
-
-        result = await extractor.extract("https://example.com/products/item")
-        assert len(result.products) == 1
-        assert result.products[0]["og:title"] == "Test Product"
 
 
 # ── Pipeline._fetch_html response size limits ─────────────────────────

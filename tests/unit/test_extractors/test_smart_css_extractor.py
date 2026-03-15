@@ -59,11 +59,12 @@ def _make_mock_crawler(arun_return=None, arun_side_effect=None):
     return mock_crawler
 
 
-def _make_crawl_result(success=True, html=None, extracted_content=None, error_message=None):
+def _make_crawl_result(success=True, html=None, extracted_content=None, error_message=None, fit_html=None):
     """Create a mock CrawlResult."""
     result = MagicMock()
     result.success = success
     result.html = html
+    result.fit_html = fit_html
     result.extracted_content = extracted_content
     result.error_message = error_message
     return result
@@ -488,23 +489,23 @@ class TestSmartCSSExtractor:
         html = "<div class='product'>" + "x" * 150_000 + "<span>Test</span></div>"
 
         # Manually call _generate_schema to test truncation logic
-        with patch.object(extractor, "_extract_product_region", return_value=html):
-            with patch(
-                "app.extractors.smart_css_extractor.JsonCssExtractionStrategy.generate_schema",
-            ) as mock_generate:
-                mock_generate.return_value = {
-                    "baseSelector": ".product",
-                    "fields": [{"selector": ".title", "type": "text"}],
-                }
-                await extractor._generate_schema(html)
+        # _generate_schema now expects pre-reduced HTML (fit_html or product region)
+        with patch(
+            "app.extractors.smart_css_extractor.JsonCssExtractionStrategy.generate_schema",
+        ) as mock_generate:
+            mock_generate.return_value = {
+                "baseSelector": ".product",
+                "fields": [{"selector": ".title", "type": "text"}],
+            }
+            await extractor._generate_schema(html)
 
-                # Verify that generate_schema was called with truncated HTML
-                called_html = mock_generate.call_args[1]["html"]
-                # Should be truncated to <= 150k
-                assert len(called_html) <= 150_000
-                # Should not end mid-tag (should end with '>') unless the entire HTML is smaller
-                if len(html) > 150_000:
-                    assert called_html.endswith(">"), "HTML truncation should end at a tag boundary"
+            # Verify that generate_schema was called with truncated HTML
+            called_html = mock_generate.call_args[1]["html"]
+            # Should be truncated to <= 150k
+            assert len(called_html) <= 150_000
+            # Should not end mid-tag (should end with '>') unless the entire HTML is smaller
+            if len(html) > 150_000:
+                assert called_html.endswith(">"), "HTML truncation should end at a tag boundary"
 
     def test_max_schema_html_bytes_constant(self):
         """Test that _MAX_SCHEMA_HTML_BYTES is set to 150KB."""

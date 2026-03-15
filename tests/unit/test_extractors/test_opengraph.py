@@ -3,22 +3,14 @@
 from __future__ import annotations
 
 import pytest
-from httpx import Response
 
 from app.extractors.opengraph_extractor import OpenGraphExtractor
-
-
-@pytest.fixture
-def extractor():
-    """Create OpenGraphExtractor instance."""
-    return OpenGraphExtractor()
 
 
 class TestOpenGraphExtractor:
     """Test suite for OpenGraphExtractor."""
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_full_og_tags(self, extractor, respx_mock):
+    def test_full_og_tags(self):
         """Test extraction of full OpenGraph tags."""
         html = """
         <!DOCTYPE html>
@@ -35,20 +27,17 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/product").mock(return_value=Response(200, text=html))
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/product")
 
-        result = await extractor.extract("https://example.com/product")
-
-        assert len(result.products) == 1
-        og_data = result.products[0]
+        assert len(products) == 1
+        og_data = products[0]
         assert og_data["og:title"] == "Amazing Product"
         assert og_data["og:description"] == "Best product ever"
         assert og_data["og:image"] == "https://example.com/image.jpg"
         assert og_data["og:price:amount"] == "29.99"
         assert og_data["og:price:currency"] == "USD"
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_partial_og_tags(self, extractor, respx_mock):
+    def test_partial_og_tags(self):
         """Test extraction when only some OG tags are present."""
         html = """
         <!DOCTYPE html>
@@ -62,18 +51,15 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/minimal").mock(return_value=Response(200, text=html))
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/minimal")
 
-        result = await extractor.extract("https://example.com/minimal")
-
-        assert len(result.products) == 1
-        og_data = result.products[0]
+        assert len(products) == 1
+        og_data = products[0]
         assert og_data["og:title"] == "Minimal Product"
         assert og_data["og:image"] == "https://example.com/img.jpg"
         assert "og:description" not in og_data
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_no_og_tags(self, extractor, respx_mock):
+    def test_no_og_tags(self):
         """Test when page has no OpenGraph tags."""
         html = """
         <!DOCTYPE html>
@@ -86,14 +72,11 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/no-og").mock(return_value=Response(200, text=html))
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/no-og")
 
-        result = await extractor.extract("https://example.com/no-og")
+        assert products == []
 
-        assert result.products == []
-
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_product_price_tags(self, extractor, respx_mock):
+    def test_product_price_tags(self):
         """Test extraction of product:price tags."""
         html = """
         <!DOCTYPE html>
@@ -107,17 +90,14 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/product-price").mock(return_value=Response(200, text=html))
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/product-price")
 
-        result = await extractor.extract("https://example.com/product-price")
-
-        assert len(result.products) == 1
-        og_data = result.products[0]
+        assert len(products) == 1
+        og_data = products[0]
         assert og_data["product:price:amount"] == "49.99"
         assert og_data["product:price:currency"] == "EUR"
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_empty_content_tags(self, extractor, respx_mock):
+    def test_empty_content_tags(self):
         """Test handling of OG tags with empty content."""
         html = """
         <!DOCTYPE html>
@@ -130,19 +110,16 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/empty-content").mock(return_value=Response(200, text=html))
-
-        result = await extractor.extract("https://example.com/empty-content")
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/empty-content")
 
         # Should skip empty content tags and only extract valid ones
-        assert len(result.products) == 1
-        og_data = result.products[0]
+        assert len(products) == 1
+        og_data = products[0]
         assert "og:title" not in og_data  # Empty content is skipped
         assert og_data["og:description"] == "Valid description"
         assert len(og_data) == 1
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_mixed_og_and_product_tags(self, extractor, respx_mock):
+    def test_mixed_og_and_product_tags(self):
         """Test extraction of both og: and product: prefixed tags."""
         html = """
         <!DOCTYPE html>
@@ -157,36 +134,15 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/mixed").mock(return_value=Response(200, text=html))
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/mixed")
 
-        result = await extractor.extract("https://example.com/mixed")
-
-        assert len(result.products) == 1
-        og_data = result.products[0]
+        assert len(products) == 1
+        og_data = products[0]
         assert og_data["og:title"] == "Mixed Product"
         assert og_data["product:price:amount"] == "99.99"
         assert og_data["product:availability"] == "in stock"
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_http_error(self, extractor, respx_mock):
-        """Test handling of HTTP errors."""
-        respx_mock.get("/404").mock(return_value=Response(404))
-
-        result = await extractor.extract("https://example.com/404")
-
-        assert result.products == []
-
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_network_error(self, extractor, respx_mock):
-        """Test handling of network errors."""
-        respx_mock.get("/error").mock(side_effect=Exception("Network error"))
-
-        result = await extractor.extract("https://example.com/error")
-
-        assert result.products == []
-
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_malformed_meta_tags(self, extractor, respx_mock):
+    def test_malformed_meta_tags(self):
         """Test handling of malformed meta tags."""
         html = """
         <!DOCTYPE html>
@@ -200,42 +156,15 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/malformed").mock(return_value=Response(200, text=html))
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/malformed")
 
-        result = await extractor.extract("https://example.com/malformed")
-
-        assert len(result.products) == 1
-        og_data = result.products[0]
+        assert len(products) == 1
+        og_data = products[0]
         # Should only extract valid tag
         assert og_data["og:description"] == "Valid"
         assert len(og_data) == 1
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_redirects(self, extractor, respx_mock):
-        """Test that redirects are followed."""
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta property="og:title" content="Redirected Product">
-        </head>
-        <body></body>
-        </html>
-        """
-
-        # Mock redirect chain
-        respx_mock.get("/redirect").mock(
-            return_value=Response(301, headers={"Location": "https://example.com/final"})
-        )
-        respx_mock.get("/final").mock(return_value=Response(200, text=html))
-
-        result = await extractor.extract("https://example.com/redirect")
-
-        assert len(result.products) == 1
-        assert result.products[0]["og:title"] == "Redirected Product"
-
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_all_common_og_tags(self, extractor, respx_mock):
+    def test_all_common_og_tags(self):
         """Test extraction of all commonly used OG tags."""
         html = """
         <!DOCTYPE html>
@@ -257,40 +186,30 @@ class TestOpenGraphExtractor:
         </html>
         """
 
-        respx_mock.get("/complete").mock(return_value=Response(200, text=html))
+        products = OpenGraphExtractor.extract_from_html(html, "https://example.com/complete")
 
-        result = await extractor.extract("https://example.com/complete")
-
-        assert len(result.products) == 1
-        og_data = result.products[0]
+        assert len(products) == 1
+        og_data = products[0]
         assert len(og_data) == 11
         assert og_data["og:title"] == "Complete Product"
         assert og_data["og:type"] == "product"
         assert og_data["product:condition"] == "new"
 
-    @pytest.mark.respx(base_url="https://example.com")
-    async def test_headers_sent(self, extractor, respx_mock):
-        """Test that User-Agent and Accept-Language headers are sent."""
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta property="og:title" content="Header Test Product">
-        </head>
-        <body></body>
-        </html>
-        """
+    def test_from_metadata(self):
+        """Test from_metadata static method."""
+        metadata = {
+            "og:title": "Test Product",
+            "og:image": "https://example.com/img.jpg",
+            "title": "Page Title",
+            "description": "Page description",
+        }
+        result = OpenGraphExtractor.from_metadata(metadata)
+        assert len(result) == 1
+        assert result[0]["og:title"] == "Test Product"
+        assert result[0]["og:image"] == "https://example.com/img.jpg"
+        assert "title" not in result[0]
 
-        route = respx_mock.get("/headers-test").mock(return_value=Response(200, text=html))
-
-        result = await extractor.extract("https://example.com/headers-test")
-
-        assert len(result.products) == 1
-        assert route.called
-
-        # Verify headers were sent
-        request = route.calls.last.request
-        assert "User-Agent" in request.headers
-        assert "Mozilla" in request.headers["User-Agent"]
-        assert "Accept-Language" in request.headers
-        assert "en-US" in request.headers["Accept-Language"]
+    def test_from_metadata_empty(self):
+        """Test from_metadata with empty metadata."""
+        assert OpenGraphExtractor.from_metadata({}) == []
+        assert OpenGraphExtractor.from_metadata(None) == []
