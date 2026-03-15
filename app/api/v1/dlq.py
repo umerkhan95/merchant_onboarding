@@ -91,12 +91,12 @@ async def retry_dlq_entry(
         # Parse job_data to get URL (assuming it's stored as JSON string)
         import json
 
-        from app.tasks.onboarding import process_onboarding_job
+        from app.workers.tasks import run_onboarding_pipeline
 
         data = json.loads(job_data.decode() if isinstance(job_data, bytes) else job_data)
         url = data.get("url", "")
 
-        process_onboarding_job.delay(job_id=job_id, url=url)
+        run_onboarding_pipeline.delay(job_id=job_id, shop_url=url)
     except (ImportError, Exception):
         # If Celery isn't configured or the task doesn't exist yet, just continue
         # Job has been removed from DLQ
