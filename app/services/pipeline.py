@@ -699,6 +699,46 @@ class Pipeline:
             if self._http_client is not None:
                 await self._http_client.aclose()
 
+    async def _try_oauth_admin_extraction(
+        self, platform: Platform, shop_url: str, job_id: str,
+        tracker: ExtractionTracker
+    ) -> tuple[list[dict], ExtractionTier] | None:
+        """Attempt OAuth-authenticated admin API extraction via coordinator.
+
+        Returns (raw_products, extraction_tier) on success, or None to signal
+        the caller should fall back to public API / scraping chain.
+        """
+        if not self.oauth_store:
+            return None
+
+        from app.services.oauth_extraction_coordinator import OAuthExtractionCoordinator
+        coordinator = OAuthExtractionCoordinator(self.oauth_store)
+        resolved = await coordinator.try_resolve(platform, shop_url)
+        if resolved is None:
+            return None
+
+        admin_extractor, extraction_tier = resolved
+        try:
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+            raw_products = await self._extract_with_circuit_breaker(
+                admin_extractor, shop_url, shop_url
+            )
+            if raw_products:
+                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                tracker.record_success(shop_url, len(raw_products))
+                await self._emit_extraction_metadata(job_id, raw_products, tracker)
+                return raw_products, extraction_tier
+            else:
+                tracker.record_empty(shop_url)
+                return None
+        except Exception as e:
+            logger.warning(
+                "%s Admin API failed, falling back: %s",
+                platform.value.title(), e,
+            )
+            await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
+            return None
+
     async def _extract_products(
         self, shop_url: str, platform: Platform, urls: list[str], job_id: str
     ) -> ExtractionResult:
@@ -717,286 +757,156 @@ class Pipeline:
 
         # Check for OAuth connections before platform-specific branches.
         # An OAuth connection is authoritative proof of platform, overriding detection.
-        if self.oauth_store and platform not in (Platform.BIGCOMMERCE, Platform.SHOPWARE, Platform.MAGENTO):
-            from urllib.parse import urlparse
-            import re
-            domain = urlparse(shop_url).netloc or shop_url
-            bc_conn = await self.oauth_store.get_connection("bigcommerce", domain)
-            # Try extracting store hash from mybigcommerce.com domain pattern
-            if not bc_conn:
-                m = re.match(r"store-([a-z0-9]+)\.mybigcommerce\.com", domain)
-                if m:
-                    bc_conn = await self.oauth_store.get_connection("bigcommerce", m.group(1))
-            if bc_conn:
-                logger.info("Found BigCommerce OAuth connection for %s, overriding platform=%s", domain, platform)
-                platform = Platform.BIGCOMMERCE
-            else:
-                sw_conn = await self.oauth_store.get_connection("shopware", domain)
-                if not sw_conn:
-                    sw_conn = await self.oauth_store.get_connection_by_domain(domain)
-                if sw_conn:
-                    logger.info("Found Shopware OAuth for %s, overriding platform=%s", domain, platform)
-                    platform = Platform.SHOPWARE
-                else:
-                    mg_conn = await self.oauth_store.get_connection("magento", domain)
-                    if not mg_conn:
-                        mg_conn = await self.oauth_store.get_connection_by_domain(domain)
-                    if mg_conn:
-                        logger.info("Found Magento OAuth for %s, overriding platform=%s", domain, platform)
-                        platform = Platform.MAGENTO
+        if self.oauth_store:
+            from app.services.oauth_extraction_coordinator import OAuthExtractionCoordinator
+            coordinator = OAuthExtractionCoordinator(self.oauth_store)
+            platform = await coordinator.resolve_platform_override(platform, shop_url)
 
         # Select extractor based on platform
         if platform == Platform.SHOPIFY:
             # Try authenticated Shopify Admin API first (provides barcode/GTIN)
-            shopify_admin_used = False
-            if self.oauth_store:
-                from urllib.parse import urlparse as _sp_urlparse
-                _sp_domain = _sp_urlparse(shop_url).netloc or shop_url
-                sp_conn = await self.oauth_store.get_connection("shopify", _sp_domain)
-                if not sp_conn:
-                    sp_conn = await self.oauth_store.get_connection_by_domain(_sp_domain)
-                if sp_conn and sp_conn.access_token:
-                    from app.extractors.shopify_admin_extractor import ShopifyAdminExtractor
-                    extraction_tier = ExtractionTier.SHOPIFY_ADMIN_API
-                    try:
-                        admin_extractor = ShopifyAdminExtractor(
-                            access_token=sp_conn.access_token,
-                            shop_domain=sp_conn.shop_domain,
-                        )
-                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                        raw_products = await self._extract_with_circuit_breaker(
-                            admin_extractor, shop_url, shop_url
-                        )
-                        if raw_products:
-                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                            tracker.record_success(shop_url, len(raw_products))
-                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                            shopify_admin_used = True
-                        else:
-                            tracker.record_empty(shop_url)
-                    except Exception as e:
-                        logger.warning("Shopify Admin API failed, falling back to public API: %s", e)
-                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
-                        raw_products = []
-
-                    if raw_products:
-                        # Admin API provides GTIN natively, no supplementation needed
-                        audit = tracker.build_audit()
-                        quality_score = self.quality_scorer.score_batch(raw_products)
-                        return ExtractionResult(
-                            products=raw_products,
-                            tier=extraction_tier,
-                            quality_score=quality_score,
-                            urls_attempted=len(urls),
-                            audit=audit.to_summary_dict(),
-                        )
+            oauth_result = await self._try_oauth_admin_extraction(
+                platform, shop_url, job_id, tracker
+            )
+            if oauth_result is not None:
+                raw_products, extraction_tier = oauth_result
+                # Admin API provides GTIN natively, no supplementation needed
+                audit = tracker.build_audit()
+                quality_score = self.quality_scorer.score_batch(raw_products)
+                return ExtractionResult(
+                    products=raw_products,
+                    tier=extraction_tier,
+                    quality_score=quality_score,
+                    urls_attempted=len(urls),
+                    audit=audit.to_summary_dict(),
+                )
 
             # Fall back to public Shopify API
-            if not shopify_admin_used:
-                extractor = ShopifyAPIExtractor()
-                extraction_tier = ExtractionTier.API
-                await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                raw_products = await self._extract_with_circuit_breaker(
-                    extractor, shop_url, shop_url
+            extractor = ShopifyAPIExtractor()
+            extraction_tier = ExtractionTier.API
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+            raw_products = await self._extract_with_circuit_breaker(
+                extractor, shop_url, shop_url
+            )
+            if raw_products:
+                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                tracker.record_success(shop_url, len(raw_products))
+                await self._emit_extraction_metadata(job_id, raw_products, tracker)
+            else:
+                tracker.record_empty(shop_url)
+            # Fallback to full chain on discovered URLs if API returned nothing
+            if not raw_products and urls:
+                logger.info("Shopify API returned 0 products, falling back to extraction chain")
+                raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                    urls, shop_url, job_id, tracker=tracker
                 )
+                # Supplement zero-price / geo-currency products with Shopify API pricing
                 if raw_products:
-                    ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                    tracker.record_success(shop_url, len(raw_products))
-                    await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                else:
-                    tracker.record_empty(shop_url)
-                # Fallback to full chain on discovered URLs if API returned nothing
-                if not raw_products and urls:
-                    logger.info("Shopify API returned 0 products, falling back to extraction chain")
-                    raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                        urls, shop_url, job_id, tracker=tracker
+                    supplementer = ShopifyPriceSupplementer(self.circuit_breaker)
+                    raw_products = await supplementer.supplement(
+                        raw_products, shop_url
                     )
-                    # Supplement zero-price / geo-currency products with Shopify API pricing
-                    if raw_products:
-                        supplementer = ShopifyPriceSupplementer(self.circuit_breaker)
-                        raw_products = await supplementer.supplement(
-                            raw_products, shop_url
-                        )
-                raw_products = await self._supplement_gtin_if_needed(
-                    raw_products, platform, shop_url, job_id
-                )
+            raw_products = await self._supplement_gtin_if_needed(
+                raw_products, platform, shop_url, job_id
+            )
 
         elif platform == Platform.WOOCOMMERCE:
             # Try authenticated WooCommerce REST API v3 first (provides GTIN via meta_data)
-            wc_admin_used = False
-            if self.oauth_store:
-                from urllib.parse import urlparse as _wc_urlparse
-                _wc_domain = _wc_urlparse(shop_url).netloc or shop_url
-                wc_conn = await self.oauth_store.get_connection("woocommerce", _wc_domain)
-                if not wc_conn:
-                    wc_conn = await self.oauth_store.get_connection_by_domain(_wc_domain)
-                if wc_conn and wc_conn.consumer_key and wc_conn.consumer_secret:
-                    from app.extractors.woocommerce_admin_extractor import WooCommerceAdminExtractor
-                    extraction_tier = ExtractionTier.WOOCOMMERCE_API
-                    try:
-                        wc_extractor = WooCommerceAdminExtractor(wc_conn)
-                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                        raw_products = await self._extract_with_circuit_breaker(
-                            wc_extractor, shop_url, shop_url
-                        )
-                        if raw_products:
-                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                            tracker.record_success(shop_url, len(raw_products))
-                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                            wc_admin_used = True
-                        else:
-                            tracker.record_empty(shop_url)
-                    except Exception as e:
-                        logger.warning("WooCommerce REST API v3 failed, falling back: %s", e)
-                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
-                        raw_products = []
-
-                    if raw_products:
-                        # REST API v3 provides GTIN natively via meta_data — skip supplementer
-                        audit = tracker.build_audit()
-                        quality_score = self.quality_scorer.score_batch(raw_products)
-                        return ExtractionResult(
-                            products=raw_products,
-                            tier=extraction_tier,
-                            quality_score=quality_score,
-                            urls_attempted=len(urls),
-                            audit=audit.to_summary_dict(),
-                        )
+            oauth_result = await self._try_oauth_admin_extraction(
+                platform, shop_url, job_id, tracker
+            )
+            if oauth_result is not None:
+                raw_products, extraction_tier = oauth_result
+                # REST API v3 provides GTIN natively via meta_data — skip supplementer
+                audit = tracker.build_audit()
+                quality_score = self.quality_scorer.score_batch(raw_products)
+                return ExtractionResult(
+                    products=raw_products,
+                    tier=extraction_tier,
+                    quality_score=quality_score,
+                    urls_attempted=len(urls),
+                    audit=audit.to_summary_dict(),
+                )
 
             # Fall back to public WooCommerce Store API
-            if not wc_admin_used:
-                extractor = WooCommerceAPIExtractor()
-                extraction_tier = ExtractionTier.API
-                await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                raw_products = await self._extract_with_circuit_breaker(
-                    extractor, shop_url, shop_url
+            extractor = WooCommerceAPIExtractor()
+            extraction_tier = ExtractionTier.API
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+            raw_products = await self._extract_with_circuit_breaker(
+                extractor, shop_url, shop_url
+            )
+            if raw_products:
+                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                tracker.record_success(shop_url, len(raw_products))
+                await self._emit_extraction_metadata(job_id, raw_products, tracker)
+            else:
+                tracker.record_empty(shop_url)
+            # Fallback to full chain on discovered URLs if API returned nothing
+            if not raw_products and urls:
+                logger.info("WooCommerce API returned 0 products, falling back to extraction chain")
+                raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                    urls, shop_url, job_id, tracker=tracker
                 )
-                if raw_products:
-                    ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                    tracker.record_success(shop_url, len(raw_products))
-                    await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                else:
-                    tracker.record_empty(shop_url)
-                # Fallback to full chain on discovered URLs if API returned nothing
-                if not raw_products and urls:
-                    logger.info("WooCommerce API returned 0 products, falling back to extraction chain")
-                    raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                        urls, shop_url, job_id, tracker=tracker
-                    )
-                raw_products = await self._supplement_gtin_if_needed(
-                    raw_products, platform, shop_url, job_id
-                )
+            raw_products = await self._supplement_gtin_if_needed(
+                raw_products, platform, shop_url, job_id
+            )
 
         elif platform == Platform.MAGENTO:
             # Try authenticated Magento Admin API first (provides GTIN from custom attrs)
-            mg_admin_used = False
-            raw_products = []
-            extraction_tier = ExtractionTier.MAGENTO_API
-            if self.oauth_store:
-                from urllib.parse import urlparse as _mg_urlparse
-                _mg_domain = _mg_urlparse(shop_url).netloc or shop_url
-                mg_conn = await self.oauth_store.get_connection("magento", _mg_domain)
-                if not mg_conn:
-                    mg_conn = await self.oauth_store.get_connection_by_domain(_mg_domain)
-                if mg_conn and mg_conn.access_token:
-                    from app.extractors.magento_admin_extractor import MagentoAdminExtractor
-                    try:
-                        mg_extractor = MagentoAdminExtractor(mg_conn)
-                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                        raw_products = await self._extract_with_circuit_breaker(
-                            mg_extractor, shop_url, shop_url
-                        )
-                        if raw_products:
-                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                            tracker.record_success(shop_url, len(raw_products))
-                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                            mg_admin_used = True
-                        else:
-                            tracker.record_empty(shop_url)
-                    except Exception as e:
-                        logger.warning("Magento Admin API failed, falling back to scraping: %s", e)
-                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
-                        raw_products = []
-
-                    if raw_products:
-                        audit = tracker.build_audit()
-                        quality_score = self.quality_scorer.score_batch(raw_products)
-                        return ExtractionResult(
-                            products=raw_products,
-                            tier=extraction_tier,
-                            quality_score=quality_score,
-                            urls_attempted=len(urls),
-                            audit=audit.to_summary_dict(),
-                        )
+            oauth_result = await self._try_oauth_admin_extraction(
+                platform, shop_url, job_id, tracker
+            )
+            if oauth_result is not None:
+                raw_products, extraction_tier = oauth_result
+                audit = tracker.build_audit()
+                quality_score = self.quality_scorer.score_batch(raw_products)
+                return ExtractionResult(
+                    products=raw_products,
+                    tier=extraction_tier,
+                    quality_score=quality_score,
+                    urls_attempted=len(urls),
+                    audit=audit.to_summary_dict(),
+                )
 
             # Fall back to unauthenticated public API then scraping chain
-            if not mg_admin_used:
-                extractor = MagentoAPIExtractor()
-                extraction_tier = ExtractionTier.API
-                await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                raw_products = await self._extract_with_circuit_breaker(
-                    extractor, shop_url, shop_url
+            extractor = MagentoAPIExtractor()
+            extraction_tier = ExtractionTier.API
+            await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
+            raw_products = await self._extract_with_circuit_breaker(
+                extractor, shop_url, shop_url
+            )
+            if raw_products:
+                ExtractionTracker.tag_products_with_source(raw_products, shop_url)
+                tracker.record_success(shop_url, len(raw_products))
+                await self._emit_extraction_metadata(job_id, raw_products, tracker)
+            else:
+                tracker.record_empty(shop_url)
+            # Fallback to full chain on discovered URLs if API returned nothing
+            if not raw_products and urls:
+                logger.info("Magento API returned 0 products, falling back to extraction chain")
+                raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                    urls, shop_url, job_id, tracker=tracker
                 )
-                if raw_products:
-                    ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                    tracker.record_success(shop_url, len(raw_products))
-                    await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                else:
-                    tracker.record_empty(shop_url)
-                # Fallback to full chain on discovered URLs if API returned nothing
-                if not raw_products and urls:
-                    logger.info("Magento API returned 0 products, falling back to extraction chain")
-                    raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                        urls, shop_url, job_id, tracker=tracker
-                    )
-                raw_products = await self._supplement_gtin_if_needed(
-                    raw_products, platform, shop_url, job_id
-                )
+            raw_products = await self._supplement_gtin_if_needed(
+                raw_products, platform, shop_url, job_id
+            )
 
         elif platform == Platform.BIGCOMMERCE:
             # Try authenticated BigCommerce Admin API first
-            if self.oauth_store:
-                from urllib.parse import urlparse
-                import re as _re
-                _domain = urlparse(shop_url).netloc or shop_url
-                bc_conn = await self.oauth_store.get_connection("bigcommerce", _domain)
-                if not bc_conn:
-                    bc_conn = await self.oauth_store.get_connection_by_domain(_domain)
-                # Try extracting store hash from mybigcommerce.com domain
-                if not bc_conn:
-                    _m = _re.match(r"store-([a-z0-9]+)\.mybigcommerce\.com", _domain)
-                    if _m:
-                        bc_conn = await self.oauth_store.get_connection("bigcommerce", _m.group(1))
-                if bc_conn:
-                    from app.extractors.bigcommerce_admin_extractor import BigCommerceAdminExtractor
-                    extraction_tier = ExtractionTier.BIGCOMMERCE_API
-                    try:
-                        bc_extractor = BigCommerceAdminExtractor(bc_conn)
-                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                        raw_products = await self._extract_with_circuit_breaker(
-                            bc_extractor, shop_url, shop_url
-                        )
-                        if raw_products:
-                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                            tracker.record_success(shop_url, len(raw_products))
-                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                        else:
-                            tracker.record_empty(shop_url)
-                    except Exception as e:
-                        logger.warning("BigCommerce Admin API failed, falling back to scraping: %s", e)
-                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
-                        raw_products = []
-
-                    if raw_products:
-                        audit = tracker.build_audit()
-                        quality_score = self.quality_scorer.score_batch(raw_products)
-                        return ExtractionResult(
-                            products=raw_products,
-                            tier=extraction_tier,
-                            quality_score=quality_score,
-                            urls_attempted=len(urls),
-                            audit=audit.to_summary_dict(),
-                        )
+            oauth_result = await self._try_oauth_admin_extraction(
+                platform, shop_url, job_id, tracker
+            )
+            if oauth_result is not None:
+                raw_products, extraction_tier = oauth_result
+                audit = tracker.build_audit()
+                quality_score = self.quality_scorer.score_batch(raw_products)
+                return ExtractionResult(
+                    products=raw_products,
+                    tier=extraction_tier,
+                    quality_score=quality_score,
+                    urls_attempted=len(urls),
+                    audit=audit.to_summary_dict(),
+                )
 
             # Fallback to scraping chain
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
@@ -1005,51 +915,25 @@ class Pipeline:
 
         elif platform == Platform.SHOPWARE:
             # Try authenticated Shopware Admin API first
-            sw_admin_used = False
-            raw_products = []
-            extraction_tier = ExtractionTier.SHOPWARE_API
-            if self.oauth_store:
-                from urllib.parse import urlparse as _sw_urlparse
-                _sw_domain = _sw_urlparse(shop_url).netloc or shop_url
-                sw_conn = await self.oauth_store.get_connection("shopware", _sw_domain)
-                if not sw_conn:
-                    sw_conn = await self.oauth_store.get_connection_by_domain(_sw_domain)
-                if sw_conn and sw_conn.access_token and sw_conn.refresh_token:
-                    from app.extractors.shopware_admin_extractor import ShopwareAdminExtractor
-                    try:
-                        sw_extractor = ShopwareAdminExtractor(sw_conn)
-                        await self.progress.set_metadata(job_id, extraction_tier=extraction_tier.value)
-                        raw_products = await self._extract_with_circuit_breaker(
-                            sw_extractor, shop_url, shop_url
-                        )
-                        if raw_products:
-                            ExtractionTracker.tag_products_with_source(raw_products, shop_url)
-                            tracker.record_success(shop_url, len(raw_products))
-                            await self._emit_extraction_metadata(job_id, raw_products, tracker)
-                            sw_admin_used = True
-                        else:
-                            tracker.record_empty(shop_url)
-                    except Exception as e:
-                        logger.warning("Shopware Admin API failed, falling back to scraping: %s", e)
-                        await self.progress.set_metadata(job_id, oauth_fallback_reason=str(e))
-                        raw_products = []
-
-                    if raw_products:
-                        audit = tracker.build_audit()
-                        quality_score = self.quality_scorer.score_batch(raw_products)
-                        return ExtractionResult(
-                            products=raw_products,
-                            tier=extraction_tier,
-                            quality_score=quality_score,
-                            urls_attempted=len(urls),
-                            audit=audit.to_summary_dict(),
-                        )
+            oauth_result = await self._try_oauth_admin_extraction(
+                platform, shop_url, job_id, tracker
+            )
+            if oauth_result is not None:
+                raw_products, extraction_tier = oauth_result
+                audit = tracker.build_audit()
+                quality_score = self.quality_scorer.score_batch(raw_products)
+                return ExtractionResult(
+                    products=raw_products,
+                    tier=extraction_tier,
+                    quality_score=quality_score,
+                    urls_attempted=len(urls),
+                    audit=audit.to_summary_dict(),
+                )
 
             # Fallback to scraping chain
-            if not sw_admin_used:
-                raw_products, extraction_tier = await self._extract_with_fallback_chain(
-                    urls, shop_url, job_id, tracker=tracker
-                )
+            raw_products, extraction_tier = await self._extract_with_fallback_chain(
+                urls, shop_url, job_id, tracker=tracker
+            )
 
         else:  # Platform.GENERIC
             raw_products, extraction_tier = await self._extract_with_fallback_chain(
