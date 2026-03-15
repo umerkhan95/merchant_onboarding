@@ -24,10 +24,10 @@ Automated e-commerce product ingestion for [idealo](https://www.idealo.de). Past
               │   (job queue, progress tracking, SSE)     │
               └────────────────────┬─────────────────────┘
                                    │
-    ┌──────────────────────────────▼──────────────────────────────┐
+    ┌──────────────────────────────▼───────────────────────────────┐
     │                      Pipeline Orchestrator                   │
     │                                                              │
-    │  1. PlatformDetector ─── shopify│woo│magento│bigcommerce    │
+    │  1. PlatformDetector ─── shopify│woo│magento│bigcommerce     │
     │                                  │shopware│generic           │
     │                                                              │
     │  2. URLDiscoveryService ── API pagination / sitemaps /       │
@@ -46,15 +46,15 @@ Automated e-commerce product ingestion for [idealo](https://www.idealo.de). Past
     │                                                              │
     │  4. ExtractionValidator ── quality gate (score >= 0.3)       │
     │  5. ProductNormalizer ── unified Product schema              │
-    │  6. BulkIngestor ── staging table → COPY → ON CONFLICT      │
-    │  7. idealo CSV/TSV Export + PWS 2.0 API                     │
+    │  6. BulkIngestor ── staging table → COPY → ON CONFLICT       │
+    │  7. idealo CSV/TSV Export + PWS 2.0 API                      │
     └──────────────────────────────────────────────────────────────┘
                                    │
-                    ┌──────────────▼──────────────┐
+                    ┌──────────────▼───────────────┐
                     │  PostgreSQL (Supabase)       │
                     │  12 tables, RBAC, encrypted  │
                     │  OAuth tokens (Fernet)       │
-                    └─────────────────────────────┘
+                    └──────────────────────────────┘
 ```
 
 ## Tech Stack
