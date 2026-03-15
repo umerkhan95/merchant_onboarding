@@ -69,7 +69,7 @@ class PlatformDetector:
             PlatformResult with detected platform, confidence score, and signals
         """
         start_time = time.time()
-        logger.info(f"Starting platform detection for {url}")
+        logger.info("Starting platform detection for %s", url)
 
         signals: dict[Platform, list[str]] = {
             Platform.SHOPIFY: [],
@@ -99,9 +99,9 @@ class PlatformDetector:
                 await self._probe_html_content(client, url, signals)
 
         except TimeoutError:
-            logger.warning(f"Platform detection timed out after {TOTAL_TIMEOUT}s for {url}")
+            logger.warning("Platform detection timed out after %ss for %s", TOTAL_TIMEOUT, url)
         except Exception as e:
-            logger.error(f"Error during platform detection for {url}: {e}")
+            logger.error("Error during platform detection for %s: %s", url, e)
         finally:
             # Close client if we created it
             if self._client is None:
@@ -116,8 +116,8 @@ class PlatformDetector:
 
         elapsed = time.time() - start_time
         logger.info(
-            f"Platform detection complete for {url}: {platform} "
-            f"(confidence: {confidence:.2f}, signals: {len(platform_signals)}, time: {elapsed:.2f}s)"
+            "Platform detection complete for %s: %s (confidence: %.2f, signals: %d, time: %.2fs)",
+            url, platform, confidence, len(platform_signals), elapsed,
         )
 
         return PlatformResult(platform=platform, confidence=confidence, signals=platform_signals, html=self._cached_html)
@@ -133,7 +133,7 @@ class PlatformDetector:
             signals: Dictionary to accumulate detection signals
         """
         try:
-            logger.debug(f"Probing headers for {url}")
+            logger.debug("Probing headers for %s", url)
             start = time.time()
             response = await client.head(url)
             elapsed = time.time() - start
@@ -143,29 +143,29 @@ class PlatformDetector:
             # Shopify headers
             if "x-shopid" in headers or "x-shopify-stage" in headers:
                 signals[Platform.SHOPIFY].append("header:x-shopify")
-                logger.debug(f"Found Shopify header in {elapsed:.2f}s")
+                logger.debug("Found Shopify header in %.2fs", elapsed)
 
             # Magento headers
             if any(key.lower().startswith("x-magento") for key in headers):
                 signals[Platform.MAGENTO].append("header:x-magento")
-                logger.debug(f"Found Magento header in {elapsed:.2f}s")
+                logger.debug("Found Magento header in %.2fs", elapsed)
 
             # WordPress/WooCommerce headers (Link header with wp-json)
             link_header = headers.get("link", "")
             if "wp-json" in link_header.lower() and "api.w.org" in link_header.lower():
                 signals[Platform.WOOCOMMERCE].append("header:wp-json-link")
-                logger.debug(f"Found WooCommerce header in {elapsed:.2f}s")
+                logger.debug("Found WooCommerce header in %.2fs", elapsed)
 
             # Shopware headers
             headers_lower = {k.lower(): v for k, v in headers.items()}
             if "sw-version-id" in headers_lower or "sw-context-token" in headers_lower:
                 signals[Platform.SHOPWARE].append("header:shopware")
-                logger.debug(f"Found Shopware header in {elapsed:.2f}s")
+                logger.debug("Found Shopware header in %.2fs", elapsed)
 
         except httpx.TimeoutException:
-            logger.debug(f"Header probe timed out for {url}")
+            logger.debug("Header probe timed out for %s", url)
         except Exception as e:
-            logger.debug(f"Header probe failed for {url}: {e}")
+            logger.debug("Header probe failed for %s: %s", url, e)
 
     async def _probe_api_endpoints(
         self, client: httpx.AsyncClient, url: str, signals: dict[Platform, list[str]]
@@ -194,7 +194,7 @@ class PlatformDetector:
     ) -> None:
         """Probe Shopify /products.json endpoint."""
         try:
-            logger.debug(f"Probing Shopify API for {base_url}")
+            logger.debug("Probing Shopify API for %s", base_url)
             start = time.time()
             response = await client.get(f"{base_url}/products.json", timeout=PROBE_TIMEOUT)
             elapsed = time.time() - start
@@ -203,19 +203,19 @@ class PlatformDetector:
                 data = response.json()
                 if "products" in data:
                     signals[Platform.SHOPIFY].append("api:/products.json")
-                    logger.debug(f"Found Shopify API endpoint in {elapsed:.2f}s")
+                    logger.debug("Found Shopify API endpoint in %.2fs", elapsed)
 
         except httpx.TimeoutException:
-            logger.debug(f"Shopify API probe timed out for {base_url}")
+            logger.debug("Shopify API probe timed out for %s", base_url)
         except Exception as e:
-            logger.debug(f"Shopify API probe failed for {base_url}: {e}")
+            logger.debug("Shopify API probe failed for %s: %s", base_url, e)
 
     async def _probe_woocommerce_api(
         self, client: httpx.AsyncClient, base_url: str, signals: dict[Platform, list[str]]
     ) -> None:
         """Probe WooCommerce /wp-json/ endpoint."""
         try:
-            logger.debug(f"Probing WooCommerce API for {base_url}")
+            logger.debug("Probing WooCommerce API for %s", base_url)
             start = time.time()
             response = await client.get(f"{base_url}/wp-json/", timeout=PROBE_TIMEOUT)
             elapsed = time.time() - start
@@ -225,19 +225,19 @@ class PlatformDetector:
                 # WordPress REST API returns namespaces array
                 if "namespaces" in data:
                     signals[Platform.WOOCOMMERCE].append("api:/wp-json/")
-                    logger.debug(f"Found WooCommerce API endpoint in {elapsed:.2f}s")
+                    logger.debug("Found WooCommerce API endpoint in %.2fs", elapsed)
 
         except httpx.TimeoutException:
-            logger.debug(f"WooCommerce API probe timed out for {base_url}")
+            logger.debug("WooCommerce API probe timed out for %s", base_url)
         except Exception as e:
-            logger.debug(f"WooCommerce API probe failed for {base_url}: {e}")
+            logger.debug("WooCommerce API probe failed for %s: %s", base_url, e)
 
     async def _probe_magento_api(
         self, client: httpx.AsyncClient, base_url: str, signals: dict[Platform, list[str]]
     ) -> None:
         """Probe Magento /rest/V1/store/storeConfigs endpoint."""
         try:
-            logger.debug(f"Probing Magento API for {base_url}")
+            logger.debug("Probing Magento API for %s", base_url)
             start = time.time()
             response = await client.get(f"{base_url}/rest/V1/store/storeConfigs", timeout=PROBE_TIMEOUT)
             elapsed = time.time() - start
@@ -247,31 +247,31 @@ class PlatformDetector:
                 # Magento returns array of store configs
                 if isinstance(data, list) and len(data) > 0:
                     signals[Platform.MAGENTO].append("api:/rest/V1/store/storeConfigs")
-                    logger.debug(f"Found Magento API endpoint in {elapsed:.2f}s")
+                    logger.debug("Found Magento API endpoint in %.2fs", elapsed)
 
         except httpx.TimeoutException:
-            logger.debug(f"Magento API probe timed out for {base_url}")
+            logger.debug("Magento API probe timed out for %s", base_url)
         except Exception as e:
-            logger.debug(f"Magento API probe failed for {base_url}: {e}")
+            logger.debug("Magento API probe failed for %s: %s", base_url, e)
 
     async def _probe_shopware_api_endpoint(
         self, client: httpx.AsyncClient, base_url: str, signals: dict[Platform, list[str]]
     ) -> None:
         """Probe Shopware 6 /api/_info/config endpoint (no auth required)."""
         try:
-            logger.debug(f"Probing Shopware API for {base_url}")
+            logger.debug("Probing Shopware API for %s", base_url)
             start = time.time()
             response = await client.get(f"{base_url}/api/_info/config", timeout=PROBE_TIMEOUT)
             elapsed = time.time() - start
 
             if response.status_code == 200:
                 signals[Platform.SHOPWARE].append("api:/api/_info/config")
-                logger.debug(f"Found Shopware API endpoint in {elapsed:.2f}s")
+                logger.debug("Found Shopware API endpoint in %.2fs", elapsed)
 
         except httpx.TimeoutException:
-            logger.debug(f"Shopware API probe timed out for {base_url}")
+            logger.debug("Shopware API probe timed out for %s", base_url)
         except Exception as e:
-            logger.debug(f"Shopware API probe failed for {base_url}: {e}")
+            logger.debug("Shopware API probe failed for %s: %s", base_url, e)
 
     async def _probe_html_content(
         self, client: httpx.AsyncClient, url: str, signals: dict[Platform, list[str]]
@@ -286,13 +286,13 @@ class PlatformDetector:
             signals: Dictionary to accumulate detection signals
         """
         try:
-            logger.debug(f"Probing HTML content for {url}")
+            logger.debug("Probing HTML content for %s", url)
             start = time.time()
             response = await client.get(url, timeout=PROBE_TIMEOUT)
             elapsed = time.time() - start
 
             if response.status_code != 200:
-                logger.debug(f"HTML probe returned status {response.status_code} for {url}")
+                logger.debug("HTML probe returned status %s for %s", response.status_code, url)
                 return
 
             content_length = int(response.headers.get("content-length", 0))
@@ -322,12 +322,12 @@ class PlatformDetector:
             # CDN/Script source detection
             self._analyze_cdn_sources(html, signals)
 
-            logger.debug(f"HTML content analyzed in {elapsed:.2f}s")
+            logger.debug("HTML content analyzed in %.2fs", elapsed)
 
         except httpx.TimeoutException:
-            logger.debug(f"HTML probe timed out for {url}")
+            logger.debug("HTML probe timed out for %s", url)
         except Exception as e:
-            logger.debug(f"HTML probe failed for {url}: {e}")
+            logger.debug("HTML probe failed for %s: %s", url, e)
 
     def _analyze_meta_tags(self, html: str, signals: dict[Platform, list[str]]) -> None:
         """Extract platform information from meta tags.
@@ -406,7 +406,7 @@ class PlatformDetector:
         # Return platform with most signals
         for platform, count in platform_counts.items():
             if count == max_count:
-                logger.debug(f"Platform {platform} selected with {count} signals")
+                logger.debug("Platform %s selected with %s signals", platform, count)
                 return platform, signals[platform]
 
         # Fallback (should never reach here)

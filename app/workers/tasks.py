@@ -37,7 +37,7 @@ def run_onboarding_pipeline(self, job_id: str, shop_url: str, max_urls: int | No
     Raises:
         Exception: Re-raises exceptions from pipeline after retries
     """
-    logger.info(f"Starting onboarding task for job {job_id}, shop URL: {shop_url}")
+    logger.info("Starting onboarding task for job %s, shop URL: %s", job_id, shop_url)
 
     # Create event loop and run pipeline
     loop = asyncio.new_event_loop()
@@ -45,7 +45,7 @@ def run_onboarding_pipeline(self, job_id: str, shop_url: str, max_urls: int | No
 
     try:
         result = loop.run_until_complete(_run_pipeline(job_id, shop_url, max_urls=max_urls, feed_url=feed_url))
-        logger.info(f"Onboarding task completed for job {job_id}: {result}")
+        logger.info("Onboarding task completed for job %s: %s", job_id, result)
         return result
     except Exception as exc:
         logger.exception(f"Onboarding task failed for job {job_id}: {exc}")

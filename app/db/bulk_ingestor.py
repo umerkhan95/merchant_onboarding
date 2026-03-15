@@ -72,9 +72,9 @@ class BulkIngestor:
             batch = products[i : i + self.BATCH_SIZE]
             affected = await self._ingest_batch(batch)
             total_affected += affected
-            logger.info(f"Ingested batch {i // self.BATCH_SIZE + 1}: {affected} products affected")
+            logger.info("Ingested batch %s: %s products affected", i // self.BATCH_SIZE + 1, affected)
 
-        logger.info(f"Bulk ingest complete. Total products affected: {total_affected}")
+        logger.info("Bulk ingest complete. Total products affected: %s", total_affected)
         return total_affected
 
     @staticmethod
@@ -175,7 +175,7 @@ class BulkIngestor:
                 return affected_count
 
             except Exception as e:
-                logger.error(f"Bulk ingest batch failed: {e}")
+                logger.error("Bulk ingest batch failed: %s", e)
                 raise RuntimeError(f"Failed to ingest product batch: {e}") from e
 
     async def count_invalid_products(self) -> int:

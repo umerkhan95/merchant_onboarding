@@ -334,7 +334,7 @@ class Pipeline:
     async def _run_inner(self, job_id: str, shop_url: str, max_urls: int | None = None) -> dict:
         """Inner pipeline logic wrapped by run() with timeout."""
         shop_url = normalize_shop_url(shop_url)
-        logger.info(f"Starting pipeline for job {job_id}, shop URL: {shop_url}")
+        logger.info("Starting pipeline for job %s, shop URL: %s", job_id, shop_url)
 
         # Create a shared HTTP client for the entire pipeline run
         self._http_client = self._create_http_client()
@@ -361,7 +361,8 @@ class Pipeline:
             platform_result = await self.detector.detect(shop_url)
             platform = platform_result.platform
             logger.info(
-                f"Platform detected: {platform} (confidence: {platform_result.confidence:.2f})"
+                "Platform detected: %s (confidence: %.2f)",
+                platform, platform_result.confidence,
             )
             await self.progress.set_metadata(job_id, platform=platform.value)
 
@@ -408,7 +409,7 @@ class Pipeline:
             urls = await self.discovery.discover(shop_url, platform)
             effective_max = max_urls or _DEFAULT_MAX_URLS
             if len(urls) > effective_max:
-                logger.info(f"Capping discovered URLs from {len(urls)} to {effective_max}")
+                logger.info("Capping discovered URLs from %s to %s", len(urls), effective_max)
                 urls = urls[:effective_max]
 
             # SSRF validation: filter out discovered URLs pointing to private/internal IPs
@@ -426,7 +427,7 @@ class Pipeline:
                 logger.warning("SSRF: dropped %d of %d discovered URLs", ssrf_dropped, len(urls))
             urls = validated_urls
 
-            logger.info(f"Discovered {len(urls)} URLs for extraction")
+            logger.info("Discovered %s URLs for extraction", len(urls))
 
             if not urls:
                 # Check if we have an OAuth connection that can fetch products
@@ -452,7 +453,7 @@ class Pipeline:
                         has_admin_api = _oauth_conn is not None and _oauth_conn.access_token is not None
 
                 if not has_admin_api:
-                    logger.warning(f"No URLs discovered for {shop_url}")
+                    logger.warning("No URLs discovered for %s", shop_url)
                     await self.progress.update(
                         job_id=job_id,
                         processed=0,
@@ -487,15 +488,16 @@ class Pipeline:
                 shop_url, platform, urls, job_id
             )
             logger.info(
-                f"Extracted {extraction_result.product_count} raw products "
-                f"(tier: {extraction_result.tier}, quality: {extraction_result.quality_score:.2f})"
+                "Extracted %d raw products (tier: %s, quality: %.2f)",
+                extraction_result.product_count, extraction_result.tier, extraction_result.quality_score,
             )
 
             # Step 3b: Validate extraction results
             validation = self.validator.validate(extraction_result)
             if not validation:
                 logger.warning(
-                    f"Extraction validation failed for {shop_url}: {validation.reason} -- {validation.message}"
+                    "Extraction validation failed for %s: %s -- %s",
+                    shop_url, validation.reason, validation.message,
                 )
                 await self.progress.update(
                     job_id=job_id,
@@ -602,7 +604,7 @@ class Pipeline:
                 if self.ingestor and normalized_batch:
                     total_ingested += await self.ingestor.ingest(normalized_batch)
 
-            logger.info(f"Normalized {total_normalized} products")
+            logger.info("Normalized %s products", total_normalized)
 
             # Log normalization drop rate if products were lost
             if total_extracted:
@@ -621,7 +623,7 @@ class Pipeline:
                         )
 
             if total_ingested:
-                logger.info(f"Ingested {total_ingested} products to database")
+                logger.info("Ingested %s products to database", total_ingested)
 
             # Backfill merchant profile currency from product data
             if (
@@ -669,7 +671,7 @@ class Pipeline:
                 products_count=total_normalized,
             )
 
-            logger.info(f"Pipeline completed for job {job_id}")
+            logger.info("Pipeline completed for job %s", job_id)
 
             return {
                 "platform": platform.value,

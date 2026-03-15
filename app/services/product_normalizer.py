@@ -66,7 +66,7 @@ class ProductNormalizer:
         try:
             product = Product(**normalized_data)
         except Exception as e:
-            logger.warning(f"Failed to create Product from normalized data: {e}")
+            logger.warning("Failed to create Product from normalized data: %s", e)
             return None
 
         if not self._is_valid_product(product):
@@ -144,7 +144,7 @@ class ProductNormalizer:
         try:
             price = Decimal(first_variant.get("price", "0"))
         except (InvalidOperation, ValueError):
-            logger.warning(f"Invalid Shopify price for product {raw.get('id')}")
+            logger.warning("Invalid Shopify price for product %s", raw.get('id'))
             price = Decimal("0")
 
         # Parse compare_at_price
@@ -153,7 +153,7 @@ class ProductNormalizer:
             try:
                 compare_at_price = Decimal(compare_at_raw)
             except (InvalidOperation, ValueError):
-                logger.warning(f"Invalid compare_at_price for Shopify product {raw.get('id')}")
+                logger.warning("Invalid compare_at_price for Shopify product %s", raw.get('id'))
                 compare_at_price = None
 
         # Extract image URLs (primary + additional)
@@ -210,7 +210,7 @@ class ProductNormalizer:
                     )
                 )
             except Exception as e:
-                logger.warning(f"Failed to parse Shopify variant: {e}")
+                logger.warning("Failed to parse Shopify variant: %s", e)
                 continue
 
         return {
@@ -254,7 +254,7 @@ class ProductNormalizer:
             try:
                 price = Decimal(raw.get("price") or "0")
             except (InvalidOperation, ValueError):
-                logger.warning(f"Invalid WooCommerce admin price for product {raw.get('id')}")
+                logger.warning("Invalid WooCommerce admin price for product %s", raw.get('id'))
                 price = Decimal("0")
 
             compare_at_price = None
@@ -276,7 +276,7 @@ class ProductNormalizer:
             try:
                 price = Decimal(prices.get("price", "0")) / divisor
             except (InvalidOperation, ValueError):
-                logger.warning(f"Invalid WooCommerce price for product {raw.get('id')}")
+                logger.warning("Invalid WooCommerce price for product %s", raw.get('id'))
                 price = Decimal("0")
 
             compare_at_price = None
@@ -355,7 +355,7 @@ class ProductNormalizer:
         try:
             price = Decimal(str(raw.get("price", "0")))
         except (InvalidOperation, ValueError):
-            logger.warning(f"Invalid Magento price for product {raw.get('id')}")
+            logger.warning("Invalid Magento price for product %s", raw.get('id'))
             price = Decimal("0")
 
         # Extract custom attributes
@@ -641,7 +641,7 @@ class ProductNormalizer:
         try:
             price = Decimal(str(offers.get("price", "0")))
         except (InvalidOperation, ValueError):
-            logger.warning(f"Invalid Schema.org price for product {raw.get('name')}")
+            logger.warning("Invalid Schema.org price for product %s", raw.get('name'))
             price = Decimal("0")
 
         # Extract image (can be string, list, or dict ImageObject)
@@ -735,7 +735,7 @@ class ProductNormalizer:
         try:
             price = Decimal(str(price_amount))
         except (InvalidOperation, ValueError):
-            logger.warning(f"Invalid OpenGraph price for product {title}")
+            logger.warning("Invalid OpenGraph price for product %s", title)
             price = Decimal("0")
 
         return {
@@ -798,7 +798,7 @@ class ProductNormalizer:
             else:
                 price = Decimal(str(price_raw))
         except (InvalidOperation, ValueError):
-            logger.warning(f"Invalid generic price for product {title}")
+            logger.warning("Invalid generic price for product %s", title)
             price = Decimal("0")
 
         return {
