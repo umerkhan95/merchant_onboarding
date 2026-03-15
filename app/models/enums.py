@@ -25,7 +25,7 @@ class JobStatus(StrEnum):
     EXTRACTING = "extracting"
     VERIFYING = "verifying"
     NORMALIZING = "normalizing"
-    INGESTING = "ingesting"
+    INGESTING = "ingesting"  # Legacy — no longer emitted by pipeline
     COMPLETED = "completed"
     NEEDS_REVIEW = "needs_review"
     FAILED = "failed"
@@ -36,9 +36,9 @@ class ExtractionTier(StrEnum):
 
     API = "api"
     UNIFIED_CRAWL = "unified_crawl"
-    SCHEMA_ORG = "schema_org"
-    OPENGRAPH = "opengraph"
-    SITEMAP_CSS = "sitemap_css"
+    SCHEMA_ORG = "schema_org"  # Legacy — no longer emitted by pipeline
+    OPENGRAPH = "opengraph"  # Legacy — no longer emitted by pipeline
+    SITEMAP_CSS = "sitemap_css"  # Legacy — no longer emitted by pipeline
     DEEP_CRAWL = "deep_crawl"
     SMART_CSS = "smart_css"
     BIGCOMMERCE_API = "bigcommerce_api"
