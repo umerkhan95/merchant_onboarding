@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import defusedxml.ElementTree as ET
 from defusedxml.common import DefusedXmlException
 import httpx
-from crawl4ai import AsyncUrlSeeder, AsyncWebCrawler, SeedingConfig
+from crawl4ai import AsyncUrlSeeder, AsyncWebCrawler, CacheMode, SeedingConfig
 from crawl4ai.deep_crawling import (
     BestFirstCrawlingStrategy,
     DomainFilter,
@@ -25,6 +25,13 @@ from crawl4ai.deep_crawling import (
     URLPatternFilter,
 )
 from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
+
+try:
+    from crawl4ai.deep_crawling import ContentTypeFilter
+
+    _HAS_CONTENT_TYPE_FILTER = True
+except ImportError:
+    _HAS_CONTENT_TYPE_FILTER = False
 
 from app.config import MAX_RESPONSE_SIZE
 from app.extractors.browser_config import (
@@ -375,7 +382,7 @@ class URLDiscoveryService:
         parsed = urlparse(base_url)
         domain = parsed.netloc
 
-        filter_chain = FilterChain([
+        filters = [
             DomainFilter(allowed_domains=[domain]),
             URLPatternFilter(
                 patterns=[
@@ -387,7 +394,13 @@ class URLDiscoveryService:
                 ],
                 reverse=True,
             ),
-        ])
+        ]
+        # Auto-reject non-HTML content types (images, PDFs, CSS, JS)
+        if _HAS_CONTENT_TYPE_FILTER:
+            filters.append(ContentTypeFilter(
+                allowed_types=["text/html", "application/xhtml+xml"],
+            ))
+        filter_chain = FilterChain(filters)
 
         scorer = KeywordRelevanceScorer(
             keywords=PRODUCT_KEYWORDS,
@@ -409,6 +422,10 @@ class URLDiscoveryService:
             wait_until="domcontentloaded",
             wait_for=None,
         )
+        # Use cache for discovery crawls (avoid re-fetching known pages)
+        crawl_config.cache_mode = CacheMode.ENABLED
+        # Skip markdown generation — discovery only needs links (prefetch)
+        crawl_config.only_text = True
 
         found_urls: set[str] = set()
         try:
