@@ -10,7 +10,7 @@ import pytest
 import respx
 from httpx import Response
 
-from app.extractors.browser_config import _USER_AGENTS
+from app.extractors.browser_config import HTTPX_USER_AGENT
 from app.extractors.woocommerce_api import WooCommerceAPIExtractor
 
 
@@ -328,7 +328,7 @@ async def test_uses_shared_browser_config_headers(extractor: WooCommerceAPIExtra
         # Verify the request used a User-Agent from the shared pool (not hardcoded Chrome/122)
         request = route.calls[0].request
         user_agent = request.headers.get("user-agent", "")
-        assert any(ua in user_agent for ua in _USER_AGENTS), f"Expected shared UA, got: {user_agent}"
+        assert HTTPX_USER_AGENT in user_agent, f"Expected shared UA, got: {user_agent}"
         assert "Chrome/122" not in user_agent, "Should not use hardcoded Chrome/122"
         assert request.headers.get("accept-language") == "en-US,en;q=0.9"
 
